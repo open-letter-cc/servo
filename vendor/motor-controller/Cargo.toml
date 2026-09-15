@@ -1,0 +1,33 @@
+[package]
+name = "motor-controller"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Engine-agnostic WebView abstraction seam for embedding a Servo backend (named for Servo's own motor metaphor). Reusable wrapper that keeps engine-embedding concerns out of an embedder's application crates."
+
+[features]
+# StubWebView-only. Keeps `cargo check --workspace` green without LLVM, a
+# SpiderMonkey build, so the baseline stays
+# buildable for contributors who are not touching the renderer.
+default = []
+# Pulls in real libservo and compiles ServoWebView. Everything this enables is
+# behind `#[cfg(feature = "servo-backend")]` in src/ - nothing outside this
+# crate changes shape when it is toggled.
+servo-backend = ["dep:servo"]
+
+[dependencies]
+# Real libservo, from this fork's own components/servo.
+#
+# WHY `path` AND NOT `git`: `servo = { git = "https://github.com/servo/servo" }`
+# does not resolve at any tag. components/servo is not an *explicit* member of
+# upstream's workspace - it is an implicit one, pulled in only because
+# ports/servoshell path-depends on it. Cargo's git source enumerates declared
+# members, so it never sees it; a path dependency resolves implicit members
+# fine. That asymmetry, not the tag, is the whole reason this stays a path dep.
+#
+# `optional` + `default-features = false`: libservo's defaults are
+# ["bundled", "clipboard", "js_jit", "multiprocess"]. Note that turning
+# everything off does NOT avoid SpiderMonkey - `script` is a non-optional
+# dependency of components/servo, so mozjs is required at every feature
+# combination. There is no SpiderMonkey-free libservo.
+servo = { path = "../../components/servo", optional = true, default-features = false }
