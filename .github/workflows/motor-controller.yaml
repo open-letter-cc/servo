@@ -1,0 +1,114 @@
+# Produces a Windows libservo DLL that an external embedder can download and
+# drop into its own tree, plus a check that the motor-controller seam still
+# builds against a real libservo.
+#
+# Deliberately separate from windows.yml: that workflow is upstream's
+# mach-driven servoshell/nightly pipeline. This one exists only to hand a
+# built engine to an embedder, so it stays plain `cargo` and does not share
+# windows.yml's self-hosted-runner selection.
+name: Motor Controller
+
+on:
+  push:
+    paths:
+      - "vendor/motor-controller/**"
+      - "components/servo/**"
+      - ".github/workflows/motor-controller.yaml"
+  pull_request:
+    paths:
+      - "vendor/motor-controller/**"
+      - "components/servo/**"
+      - ".github/workflows/motor-controller.yaml"
+  # So the DLL can be rebuilt without touching source.
+  workflow_dispatch:
+
+concurrency:
+  group: motor-controller-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+  # One target dir for every cargo invocation in this job. vendor/motor-controller
+  # is in the root workspace's `exclude` list, so it is its own workspace and
+  # would otherwise build libservo a second time into its own target/. Sharing
+  # the dir also keeps the artifact path literally `target/release/`.
+  CARGO_TARGET_DIR: ${{ github.workspace }}\target
+  # clang_sys searches the msys path before Program Files\LLVM.
+  LIBCLANG_PATH: C:\Program Files\LLVM\bin
+  # What `mach build` sets on Windows; raw cargo does not get it for free.
+  CC: clang-cl.exe
+  CXX: clang-cl.exe
+  RUSTUP_WINDOWS_PATH_ADD_BIN: 1
+
+jobs:
+  build:
+    name: Windows libservo DLL
+    runs-on: windows-latest
+    # A cold release build of libservo (SpiderMonkey + ANGLE) plus a second
+    # feature-distinct build for motor-controller does not fit in the default
+    # timeout.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      # Workaround for https://github.com/actions/runner-images/issues/10001
+      - name: Upgrade llvm
+        run: choco upgrade llvm
+
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+
+      - name: Bootstrap
+        run: |
+          .\mach fetch
+          .\mach bootstrap-gstreamer
+
+      - name: Put GStreamer on PATH
+        # mach installs GStreamer under $CARGO_TARGET_DIR/dependencies; raw cargo
+        # finds its pkg-config only if that bin dir is on PATH.
+        run: |
+          $gst = "$env:CARGO_TARGET_DIR\dependencies\gstreamer\1.0\msvc_X86_64"
+          "$gst\bin" >> $env:GITHUB_PATH
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gst" >> $env:GITHUB_ENV
+
+      # Cheap, and it fails in seconds if the default-feature (StubWebView-only)
+      # build has regressed - before spending hours on libservo.
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+
+      # NOTE: nothing in this tree builds a `servo.dll`. libservo is an rlib and
+      # `-p servoshell` is an .exe; the only cdylib is ffi/capi, which cargo
+      # names servo_capi.dll and which is renamed below. servo-capi and servoshell
+      # are built in one invocation on purpose: separate invocations resolve
+      # different libservo feature sets and would each compile SpiderMonkey again.
+      - name: Build libservo C ABI DLL and servoshell (release)
+        run: cargo build -p servo-capi -p servoshell --release
+
+      - name: Stage servo.dll
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          Copy-Item "$rel\servo_capi.dll" "$rel\servo.dll" -Force
+          Get-ChildItem "$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll" -ErrorAction SilentlyContinue |
+            Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libservo-windows-dll
+          # ANGLE's DLLs are included when present: servo.dll needs them at
+          # runtime on Windows (see ffi/capi/Cargo.toml).
+          path: |
+            target/release/servo.dll
+            target/release/libEGL.dll
+            target/release/libGLESv2.dll
+          if-no-files-found: error
+          retention-days: 30
+
+      # Last, so a failure here cannot cost the run its DLL artifact.
+      - name: Build motor-controller against real libservo (release)
+        working-directory: vendor/motor-controller
+        run: cargo build -p motor-controller --features servo-backend --release

@@ -14,7 +14,6 @@
 //! [`Route`] for it, so a host's routing taxonomy stays entirely in the
 //! host's own code. [`NavRoute`] is provided for embedders that don't need
 //! one of their own.
-...
 
 pub trait Route {
     /// Whether this route may only be loaded by a privileged (chrome)
@@ -179,21 +178,34 @@ impl<R> ServoWebView<R> {
     /// surface. Kept as `cfg` blocks from the start so the portable core
     /// never accumulates target-specific linkage: Windows/Linux today,
     /// macOS to follow.
+    ///
+    /// Exactly one arm survives cfg-stripping for any given target, so the
+    /// surviving block is the function's tail expression.
     #[allow(dead_code)]
-        #[allow(dead_code)]
     fn platform_surface_hint() -> &'static str {
-        #[cfg(target_os = "windows")] { "windows/angle" }
-        #[cfg(target_os = "linux")] { "linux/wayland" }
-        #[cfg(target_os = "android")] { "android/egl" }
-        #[cfg(target_os = "ios")] { "ios/wgpu" }
-        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "android", target_os = "ios")))] { "unsupported" }
-    }
+        #[cfg(target_os = "windows")]
+        {
+            "windows/angle"
+        }
         #[cfg(target_os = "linux")]
         {
             // Wayland-first, per the host compositor.
             "linux/wayland"
         }
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        #[cfg(target_os = "android")]
+        {
+            "android/egl"
+        }
+        #[cfg(target_os = "ios")]
+        {
+            "ios/wgpu"
+        }
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "ios"
+        )))]
         {
             "unsupported"
         }
