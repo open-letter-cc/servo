@@ -4,14 +4,6 @@ on:
     types: ['opened', 'synchronize', 'reopened', 'edited', 'closed']
     branches: ['main']
 
-concurrency:
-  group: ${{ github.head_ref }}
-  cancel-in-progress: false
-
-permissions:
-  # Required by actions/checkout
-  contents: read
-
 jobs:
   upstream:
     # Run job only on servo/servo
@@ -26,7 +18,7 @@ jobs:
           cd servo
           git fetch origin pull/${{ github.event.pull_request.number}}/head:pr --depth ${{ env.PR_FETCH_DEPTH }}
       - name: Check out wpt
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           path: wpt
           repository: 'web-platform-tests/wpt'
@@ -49,5 +41,5 @@ jobs:
          source .venv/bin/activate
          servo/python/wpt/export.py
         env:
-          GITHUB_EVENT: ${{ toJson(github.event) }}
+          GITHUB_CONTEXT: ${{ toJson(github) }}
           WPT_SYNC_TOKEN: ${{ secrets.WPT_SYNC_TOKEN }}

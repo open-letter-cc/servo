@@ -12,28 +12,15 @@ jobs:
     name: Upload docs to GitHub Pages
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          large-packages: false
-          swap-storage: false
+      - uses: actions/checkout@v4
       - name: Setup Python
         uses: ./.github/actions/setup-python
-      - name: Change Mirror Priorities
-        uses: ./.github/actions/apt-mirrors
       - name: Bootstrap
         run: |
           sudo apt update
-          ./mach bootstrap --yes --skip-lints --skip-nextest
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "20.1"
-          directory: ${{ runner.temp }}/llvm
-      - name: Set LIBCLANG_PATH env
-        run: echo "LIBCLANG_PATH=${LLVM_PATH}/lib" >> $GITHUB_ENV
+          ./mach bootstrap --skip-lints
+      - name: Set LIBCLANG_PATH # This is needed for bindgen in mozangle.
+        run: echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> $GITHUB_ENV
       - name: Compile docs
         run: ./mach doc
         env:

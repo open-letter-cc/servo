@@ -16,18 +16,17 @@ on:
 jobs:
   decision:
     name: Generate Try Configuration
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     outputs:
       configuration: ${{ steps.configuration.outputs.result }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
           sparse-checkout: |
             python/servo/try_parser.py
             .github/actions/setup-python
             .python-version
-            uv.lock
           sparse-checkout-cone-mode: false
       - name: Setup Python
         uses: ./.github/actions/setup-python
@@ -36,7 +35,7 @@ jobs:
         run: |
           {
             echo 'result<<EOF'
-            python ./python/servo/try_parser.py ${{ github.event_name == 'pull_request' && 'linux-unit-tests lint' || github.event_name == 'push' && 'full macos macos-arm-capi bencher production-bencher coverage' || 'fail-fast full' }}
+            python ./python/servo/try_parser.py ${{ github.event_name == 'pull_request' && 'linux-unit-tests linux-build-libservo lint' || github.event_name == 'push' && 'fail-fast full bencher production-bencher' || 'fail-fast full' }}
             echo EOF
            } >> $GITHUB_OUTPUT
 
@@ -52,17 +51,13 @@ jobs:
     secrets: inherit
     with:
       workflow: ${{ matrix.workflow }}
-      wpt: ${{ matrix.wpt }}
+      wpt-layout: ${{ matrix.wpt_layout }}
       profile: ${{ matrix.profile }}
+      build-servoshell: ${{ matrix.build_servoshell }}
       unit-tests: ${{ matrix.unit_tests }}
-      devtools-tests: ${{ matrix.devtools_tests }}
       build-libservo: ${{ matrix.build_libservo }}
       wpt-args: ${{ matrix.wpt_args }}
-      build-args: ${{ matrix.build_args }}
-      number-of-wpt-chunks: ${{ matrix.number_of_wpt_chunks }}
       bencher: ${{ matrix.bencher }}
-      coverage: ${{ matrix.coverage }}
-      capi: ${{ matrix.capi }}
 
   build-result:
     name: Result
@@ -73,7 +68,7 @@ jobs:
       - build
     steps:
       - name: Merge build timings
-        uses: actions/upload-artifact/merge@v7
+        uses: actions/upload-artifact/merge@v4
         with:
           name: cargo-timings
           pattern: cargo-timings-*
