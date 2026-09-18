@@ -1,4 +1,4 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
+﻿// This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
@@ -180,12 +180,14 @@ impl<R> ServoWebView<R> {
     /// never accumulates target-specific linkage: Windows/Linux today,
     /// macOS to follow.
     #[allow(dead_code)]
+        #[allow(dead_code)]
     fn platform_surface_hint() -> &'static str {
-        #[cfg(target_os = "windows")]
-        {
-            // ANGLE/WGL: servo's `no-wgl` feature swaps surfman onto ANGLE.
-            "windows/angle"
-        }
+        #[cfg(target_os = "windows")] { "windows/angle" }
+        #[cfg(target_os = "linux")] { "linux/wayland" }
+        #[cfg(target_os = "android")] { "android/egl" }
+        #[cfg(target_os = "ios")] { "ios/wgpu" }
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "android", target_os = "ios")))] { "unsupported" }
+    }
         #[cfg(target_os = "linux")]
         {
             // Wayland-first, per the host compositor.
@@ -268,3 +270,4 @@ mod tests {
         assert!(content.current_route().is_some());
     }
 }
+
