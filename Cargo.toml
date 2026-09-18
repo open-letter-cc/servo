@@ -7,6 +7,11 @@ members = [
     "ports/servoshell",
     "tests/capi",
     "tests/unit/*",
+    # A member, not an `exclude`d standalone package like vendor/motor-controller:
+    # it has to share this workspace's lockfile, `[patch]` table and `[profile]`
+    # overrides, and it has to resolve one `servo` feature set with ffi/capi so
+    # that building both in one `cargo` invocation compiles SpiderMonkey once.
+    "vendor/zdr-capi-shim",
 ]
 default-members = ["ports/servoshell"]
 exclude = [".cargo", "support/crown", "vendor/motor-controller"]

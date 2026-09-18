@@ -9,15 +9,25 @@
 name: Motor Controller
 
 on:
+  # NOTE: kept in sync by hand with the `pull_request` list below. GitHub
+  # Actions does not expand YAML anchors, so the duplication is unavoidable.
   push:
     paths:
       - "vendor/motor-controller/**"
+      - "vendor/zdr-capi-shim/**"
+      - "ffi/capi/**"
       - "components/servo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/motor-controller.yaml"
   pull_request:
     paths:
       - "vendor/motor-controller/**"
+      - "vendor/zdr-capi-shim/**"
+      - "ffi/capi/**"
       - "components/servo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/motor-controller.yaml"
   # So the DLL can be rebuilt without touching source.
   workflow_dispatch:
@@ -81,26 +91,121 @@ jobs:
         run: cargo test
 
       # NOTE: nothing in this tree builds a `servo.dll`. libservo is an rlib and
-      # `-p servoshell` is an .exe; the only cdylib is ffi/capi, which cargo
-      # names servo_capi.dll and which is renamed below. servo-capi and servoshell
-      # are built in one invocation on purpose: separate invocations resolve
-      # different libservo feature sets and would each compile SpiderMonkey again.
+      # `-p servoshell` is an .exe; the cdylibs are ffi/capi (which cargo names
+      # servo_capi.dll) and vendor/zdr-capi-shim (servo_capi_full.dll, renamed
+      # below).
+      #
+      # WHY THE SHIM AND NOT ffi/capi: servo_capi.dll exports thirty of the
+      # forty-two entry points a single-window embedder needs. The twelve it is
+      # missing - native rendering context, input, scroll, focus, resize, HiDPI -
+      # cannot be added by a crate that merely links to ffi/capi, because a
+      # cdylib is not linkable from Rust and the internals they need are
+      # `pub(crate)`. vendor/zdr-capi-shim therefore *includes* ffi/capi's own
+      # lib.rs and adds the twelve, so servo_capi_full.dll is a strict superset
+      # of servo_capi.dll built from the same source. See that crate's README.
+      #
+      # The shim and servoshell are built in one invocation on purpose: separate
+      # invocations resolve different libservo feature sets and would each
+      # compile SpiderMonkey again. `-p servo-capi` is deliberately NOT in this
+      # list - the shim compiles every line of it already, so building it too
+      # would only add a second multi-minute cdylib link of the same code.
       - name: Build libservo C ABI DLL and servoshell (release)
-        run: cargo build -p servo-capi -p servoshell --release
+        run: cargo build -p zdr-capi-shim -p servoshell --release
 
       - name: Stage servo.dll
         run: |
           $rel = "$env:CARGO_TARGET_DIR\release"
-          Copy-Item "$rel\servo_capi.dll" "$rel\servo.dll" -Force
-          Get-ChildItem "$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll" -ErrorAction SilentlyContinue |
+          Copy-Item "$rel\servo_capi_full.dll" "$rel\servo.dll" -Force
+          Get-ChildItem "$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll" |
             Select-Object Name, Length
+
+      # The gate this workflow exists to hold. An embedder that loads a payload
+      # exporting only thirty of these can open a page and take a screenshot of
+      # it, and can do nothing else with it - no clicking, no typing, no
+      # scrolling, no resize. That failure shows up as a dead viewport at
+      # runtime, so it is worth catching here instead.
+      #
+      # llvm-readobj rather than dumpbin: LLVM is already installed and on a
+      # known path for this job, whereas dumpbin needs a Visual Studio developer
+      # environment to be located first. `dumpbin /exports servo.dll` lists the
+      # same names.
+      - name: Check the export surface
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $readobj = "$env:LIBCLANG_PATH\llvm-readobj.exe"
+
+          $exports = & $readobj --coff-exports "$rel\servo.dll" |
+            Select-String -Pattern '^\s*Name:\s*(servo_\w+)\s*$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value } |
+            Sort-Object -Unique
+
+          Write-Host "servo.dll exports $($exports.Count) servo_* symbols"
+
+          # The twelve that `ffi/capi` does not define and that
+          # vendor/zdr-capi-shim adds. Named one by one rather than counted, so
+          # that a rename shows up as the missing name.
+          $embedding = @(
+            'servo_rendering_context_create_native',
+            'servo_rendering_context_set_window',
+            'servo_rendering_context_take_window',
+            'servo_rendering_context_clone',
+            'servo_webview_resize',
+            'servo_webview_notify_input_event',
+            'servo_webview_notify_scroll_event',
+            'servo_webview_focus',
+            'servo_webview_blur',
+            'servo_webview_focused',
+            'servo_webview_builder_set_hidpi_scale_factor',
+            'servo_webview_set_hidpi_scale_factor'
+          )
+          $missing = $embedding | Where-Object { $exports -notcontains $_ }
+          if ($missing) {
+            Write-Host "::error::servo.dll is missing $($missing.Count) embedding entry points: $($missing -join ', ')"
+            exit 1
+          }
+
+          # 42 is what a single-window embedder binds: the thirty ffi/capi
+          # already shipped plus the twelve above.
+          if ($exports.Count -lt 42) {
+            Write-Host "::error::servo.dll exports only $($exports.Count) servo_* symbols, expected at least 42"
+            exit 1
+          }
+
+          $exports | ForEach-Object { Write-Host "  $_" }
+
+      # Provenance for the payload. The three DLLs must be dropped into an
+      # embedder's tree together, from this one run: mixing a servo.dll from one
+      # run with ANGLE from another is a silently skewed engine. Recording the
+      # hashes and the commit here is what lets someone check later that they
+      # did not do that.
+      - name: Record SHA-256s
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $files = "servo.dll", "libEGL.dll", "libGLESv2.dll"
+
+          $rows = $files | ForEach-Object {
+            $hash = (Get-FileHash "$rel\$_" -Algorithm SHA256).Hash.ToLower()
+            Write-Host "$hash  $_"
+            [pscustomobject]@{ File = $_; 'SHA-256' = $hash }
+          }
+
+          "## libservo-windows-dll" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Commit ``$env:GITHUB_SHA``, run ``$env:GITHUB_RUN_ID``. All three files are from this run; do not mix them with files from another." >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| File | SHA-256 |" >> $env:GITHUB_STEP_SUMMARY
+          "| :--- | :--- |" >> $env:GITHUB_STEP_SUMMARY
+          $rows | ForEach-Object { "| ``$($_.File)`` | ``$($_.'SHA-256')`` |" >> $env:GITHUB_STEP_SUMMARY }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: libservo-windows-dll
-          # ANGLE's DLLs are included when present: servo.dll needs them at
-          # runtime on Windows (see ffi/capi/Cargo.toml).
+          # Exactly three files, all from this run. ANGLE's pair is not
+          # optional: servo.dll needs it at runtime on Windows (see
+          # ffi/capi/Cargo.toml), and surfman `LoadLibrary`s it by name when the
+          # first rendering context is created, so it has to travel with the
+          # engine.
           path: |
             target/release/servo.dll
             target/release/libEGL.dll

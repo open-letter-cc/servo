@@ -1,0 +1,53 @@
+# The full-surface C ABI cdylib for this fork.
+#
+# WHY THIS EXISTS: `ffi/capi` is `crate-type = ["cdylib"]`, so no Rust crate can
+# depend on it, and its `RenderingContext`/`ServoWebViewBuilder` internals are
+# private to that crate. The twelve embedding entry points an external embedder
+# needs (native rendering context, input, focus, resize, HiDPI) therefore cannot
+# be added from outside `ffi/capi` by *linking* to it - they can only be added by
+# a cdylib that *contains* it. This crate is that cdylib: `src/lib.rs` includes
+# `ffi/capi/lib.rs` verbatim (no copy, no fork - the same source file the
+# in-tree `servo-capi` builds) and `src/native.rs` adds the missing twelve.
+#
+# Nothing in `ffi/capi` or `components/` is edited to make this work, and
+# `servo-capi` keeps building and shipping exactly as before.
+[package]
+name = "zdr-capi-shim"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+description = "Servo C API cdylib carrying the full embedding surface, including the native-window, input, focus and HiDPI entry points not present in ffi/capi"
+
+[lib]
+# NOT `servo_capi`: `ffi/capi` already claims that lib name in this workspace and
+# two cdylibs writing `target/<profile>/servo_capi.dll` is an output-filename
+# collision that breaks `cargo build --workspace`. The shipped artifact is
+# renamed to `servo.dll` by .github/workflows/motor-controller.yaml; embedders
+# load it by file name, not by the PE export directory's internal name.
+name = "servo_capi_full"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+# Deliberately identical to ffi/capi's, so that building this crate and
+# `servo-capi` in one `cargo` invocation resolves one feature set for `servo`
+# and compiles SpiderMonkey once.
+[dependencies]
+dpi = { workspace = true }
+libc = { workspace = true }
+log = { workspace = true }
+servo = { workspace = true, features = ["js_jit", "baked-in-resources", "bundled_freetype"] }
+url = { workspace = true }
+
+# Needed by `servo_rendering_context_create_native` and friends, which the
+# in-tree capi does not have and so does not depend on. Both are already in the
+# workspace graph (`euclid` and `raw-window-handle` are direct dependencies of
+# `components/shared/paint`), so this adds no new dependency to the fork.
+euclid = { workspace = true }
+raw-window-handle = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+servo = { workspace = true, features = ["no-wgl"] }

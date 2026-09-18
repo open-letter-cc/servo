@@ -12977,6 +12977,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdr-capi-shim"
+version = "0.6.0"
+dependencies = [
+ "dpi",
+ "euclid",
+ "libc",
+ "log",
+ "raw-window-handle",
+ "servo",
+ "url",
+]
+
+[[package]]
 name = "zeitstempel"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
