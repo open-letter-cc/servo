@@ -419,14 +419,11 @@ impl ServoInner {
                     return;
                 }
                 if let Some(webview) = self.get_webview_handle(control_id.webview_id) {
-                    webview.delegate().show_embedder_control(
-                        webview,
-                        EmbedderControl::FilePicker(FilePicker {
-                            id: control_id,
-                            file_picker_request,
-                            response_sender: Some(response_sender),
-                        }),
-                    );
+                    webview.dispatch_embedder_control(EmbedderControl::FilePicker(FilePicker {
+                        id: control_id,
+                        file_picker_request,
+                        response_sender: Some(response_sender),
+                    }));
                 }
             },
             NetToEmbedderMsg::WebResourceRequested(
@@ -511,10 +508,9 @@ impl ServoInner {
             },
             EmbedderMsg::ShowSimpleDialog(webview_id, simple_dialog) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
-                    webview.delegate().show_embedder_control(
-                        webview,
-                        EmbedderControl::SimpleDialog(simple_dialog.into()),
-                    );
+                    webview.dispatch_embedder_control(EmbedderControl::SimpleDialog(
+                        simple_dialog.into(),
+                    ));
                 }
             },
             EmbedderMsg::AllowProtocolHandlerRequest(
