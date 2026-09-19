@@ -2,10 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::cell::RefCell;
 use std::ffi::c_void;
+use std::panic::{self, AssertUnwindSafe};
 
 pub use servo_api::LoadStatus;
-use servo_api::{EmbedderControl, EmbedderControlTag, WebView, WebViewDelegate};
+use servo_api::{
+    ContextMenuAction, EmbedderControl, EmbedderControlTag, SelectElementOptionOrOptgroup, WebView,
+    WebViewDelegate,
+};
 
 /// The delegate that receives notifications about `WebView` events.
 ///
@@ -137,20 +142,48 @@ impl WebViewDelegate for ServoWebViewDelegate {
             payload_len: 0,
         };
 
+        // Make the control claimable by `servo_webview_send_response` for the duration of
+        // the callback, keyed by the address of the borrowed view the embedder receives.
+        IN_FLIGHT.with(|in_flight| {
+            in_flight.borrow_mut().push(InFlightControl {
+                view: &control as *const ServoEmbedderControl,
+                control: Some(embedder_control),
+            })
+        });
+
         // SAFETY: The embedder is assumed to uphold the safety requirements of the
         // `ServoEmbedderController` struct.
         //
         // The `webview` raw pointer is derived from a valid `webview` handle, and
         // `control` borrows `origin`, which outlives the call.
-        let handled = unsafe {
+        //
+        // The callback is contracted not to unwind, but it is contained here anyway so
+        // that a panicking embedder cannot tear down Servo or strand the control: a
+        // control that is still unclaimed then follows the default path below.
+        let handled = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             on_control(
                 &mut webview as *mut WebView,
                 &control as *const ServoEmbedderControl,
                 self.user_data,
             )
-        };
+        }))
+        .unwrap_or(false);
 
         drop(origin);
+
+        let reclaimed = IN_FLIGHT.with(|in_flight| {
+            in_flight
+                .borrow_mut()
+                .pop()
+                .and_then(|in_flight| in_flight.control)
+        });
+
+        let Some(embedder_control) = reclaimed else {
+            // The embedder answered through `servo_webview_send_response`, which consumed
+            // the control and sent that response. There is no default response left to
+            // send and nothing further for Servo to do.
+            return None;
+        };
 
         (!handled).then_some(embedder_control)
     }
@@ -224,6 +257,11 @@ pub struct ServoEmbedderControl {
     pub payload_len: usize,
 }
 
+const _: () = assert!(
+    size_of::<ServoEmbedderControl>() == 40,
+    "ServoEmbedderControl must stay 40 bytes wide"
+);
+
 /// Generic embedder control extension, no domain logic.
 ///
 /// An escape hatch that lets the embedder take over selected embedder controls. It is
@@ -253,7 +291,10 @@ pub struct ServoEmbedderController {
     /// Return `false` to decline it and let Servo follow its default path.
     ///
     /// Note that a control reported as handled is dropped by Servo, and dropping a
-    /// control sends its default response (a dismissal, or the current selection).
+    /// control sends its default response (a dismissal, or the current selection). To
+    /// send some other response instead, call [`servo_webview_send_response`] with the
+    /// `control` pointer before returning; that consumes the control, so Servo sends no
+    /// default response for it afterwards.
     pub on_control: Option<
         unsafe extern "C" fn(
             webview: *mut WebView,
@@ -261,6 +302,277 @@ pub struct ServoEmbedderController {
             user_data: *mut c_void,
         ) -> bool,
     >,
+}
+
+const _: () = assert!(
+    size_of::<ServoEmbedderController>() == 16,
+    "ServoEmbedderController must stay 16 bytes wide"
+);
+
+/// Generic embedder control extension, no domain logic.
+///
+/// A control that has been offered to [`ServoEmbedderController::on_control`] and is
+/// still unanswered, together with the address of the borrowed [`ServoEmbedderControl`]
+/// view that the embedder was handed for it. The view address is what
+/// [`servo_webview_send_response`] matches on, which keeps the response path off the
+/// 40-byte `ServoEmbedderControl` ABI.
+struct InFlightControl {
+    view: *const ServoEmbedderControl,
+    /// `None` once the embedder has claimed the control with a response.
+    control: Option<EmbedderControl>,
+}
+
+thread_local! {
+    /// The controls currently being offered on this thread, innermost last. This is a
+    /// stack rather than a single slot so that an embedder that re-enters Servo from
+    /// `on_control` cannot strand or misroute the outer control.
+    static IN_FLIGHT: RefCell<Vec<InFlightControl>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Generic embedder control extension, no domain logic.
+///
+/// The action carried by a `SERVO_EMBEDDER_CONTROL_TAG_CONTEXT_MENU` response payload.
+/// The numeric values are part of the ABI. They are Servo's built-in context menu
+/// actions; an embedder that shows its own menu entries maps them onto these itself.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum ServoContextMenuAction {
+    GoBack = 1,
+    GoForward = 2,
+    Reload = 3,
+    CopyLink = 4,
+    OpenLinkInNewWebView = 5,
+    CopyImageLink = 6,
+    OpenImageInNewView = 7,
+    Cut = 8,
+    Copy = 9,
+    Paste = 10,
+    SelectAll = 11,
+}
+
+/// Translate a wire action code into the action Servo acts on, or `None` if the code is
+/// not one of the [`ServoContextMenuAction`] values.
+fn context_menu_action(code: u32) -> Option<ContextMenuAction> {
+    Some(match code {
+        code if code == ServoContextMenuAction::GoBack as u32 => ContextMenuAction::GoBack,
+        code if code == ServoContextMenuAction::GoForward as u32 => ContextMenuAction::GoForward,
+        code if code == ServoContextMenuAction::Reload as u32 => ContextMenuAction::Reload,
+        code if code == ServoContextMenuAction::CopyLink as u32 => ContextMenuAction::CopyLink,
+        code if code == ServoContextMenuAction::OpenLinkInNewWebView as u32 => {
+            ContextMenuAction::OpenLinkInNewWebView
+        },
+        code if code == ServoContextMenuAction::CopyImageLink as u32 => {
+            ContextMenuAction::CopyImageLink
+        },
+        code if code == ServoContextMenuAction::OpenImageInNewView as u32 => {
+            ContextMenuAction::OpenImageInNewView
+        },
+        code if code == ServoContextMenuAction::Cut as u32 => ContextMenuAction::Cut,
+        code if code == ServoContextMenuAction::Copy as u32 => ContextMenuAction::Copy,
+        code if code == ServoContextMenuAction::Paste as u32 => ContextMenuAction::Paste,
+        code if code == ServoContextMenuAction::SelectAll as u32 => ContextMenuAction::SelectAll,
+        _ => return None,
+    })
+}
+
+/// Decode `payload` as a sequence of little-endian `u32`s, or `None` if its length is not
+/// a whole number of them.
+fn decode_u32s(payload: &[u8]) -> Option<Vec<u32>> {
+    if payload.len() % size_of::<u32>() != 0 {
+        return None;
+    }
+    Some(
+        payload
+            .chunks_exact(size_of::<u32>())
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect(),
+    )
+}
+
+/// The number of selectable options in `options`, flattening `<optgroup>` children, which
+/// is the index space that a `SERVO_EMBEDDER_CONTROL_TAG_SELECT` response indexes into.
+fn flattened_option_count(options: &[SelectElementOptionOrOptgroup]) -> usize {
+    options
+        .iter()
+        .map(|option| match option {
+            SelectElementOptionOrOptgroup::Option(..) => 1,
+            SelectElementOptionOrOptgroup::Optgroup { options, .. } => options.len(),
+        })
+        .sum()
+}
+
+/// Decode `payload` for `embedder_control` and send the resulting response, consuming the
+/// control. Returns the control untouched if `payload` does not decode for this kind of
+/// control, so that the caller can leave Servo's default path intact.
+///
+/// This is transport only: Servo attaches no meaning to the payload beyond the fixed wire
+/// format documented on [`servo_webview_send_response`], and applies no policy of its own
+/// to what the embedder answers.
+fn send_control_response(
+    embedder_control: EmbedderControl,
+    payload: &[u8],
+) -> Result<(), EmbedderControl> {
+    match embedder_control {
+        EmbedderControl::ContextMenu(context_menu) => {
+            if payload.is_empty() {
+                context_menu.dismiss();
+                return Ok(());
+            }
+            let action = decode_u32s(payload)
+                .filter(|codes| codes.len() == 1)
+                .and_then(|codes| context_menu_action(codes[0]));
+            let Some(action) = action else {
+                return Err(EmbedderControl::ContextMenu(context_menu));
+            };
+            context_menu.select(action);
+            Ok(())
+        },
+        EmbedderControl::SelectElement(mut select_element) => {
+            let Some(indices) = decode_u32s(payload) else {
+                return Err(EmbedderControl::SelectElement(select_element));
+            };
+            let option_count = flattened_option_count(select_element.options());
+            if indices.iter().any(|index| *index as usize >= option_count) {
+                return Err(EmbedderControl::SelectElement(select_element));
+            }
+            if indices.len() > 1 && !select_element.allow_select_multiple() {
+                return Err(EmbedderControl::SelectElement(select_element));
+            }
+            select_element.select(indices.into_iter().map(|index| index as usize).collect());
+            select_element.submit();
+            Ok(())
+        },
+        EmbedderControl::FilePicker(file_picker) => {
+            // Only an explicit dismissal is expressible on this wire format; selecting
+            // files would mean transporting paths, which this ABI does not define.
+            if !payload.is_empty() {
+                return Err(EmbedderControl::FilePicker(file_picker));
+            }
+            file_picker.dismiss();
+            Ok(())
+        },
+        // Every other kind of control is untagged, so it is never offered to the embedder
+        // and can never reach this point.
+        embedder_control => Err(embedder_control),
+    }
+}
+
+/// Claim the in-flight control that `view` refers to and answer it with `payload`.
+///
+/// Returns `false`, leaving the control unclaimed, if `view` names no control currently
+/// being offered on this thread, if that control has already been answered, or if
+/// `payload` does not decode for that kind of control.
+///
+/// # Safety
+///
+/// `payload` must be valid for reads of `payload_len` bytes when `payload_len` is
+/// non-zero.
+unsafe fn claim_and_respond(
+    view: *const ServoEmbedderControl,
+    payload: *const u8,
+    payload_len: usize,
+) -> bool {
+    if view.is_null() {
+        return false;
+    }
+
+    let payload: &[u8] = if payload_len == 0 {
+        &[]
+    } else if payload.is_null() {
+        return false;
+    } else {
+        // SAFETY: The caller guarantees that `payload` is valid for reads of
+        // `payload_len` bytes, and the slice is not held past this call.
+        unsafe { std::slice::from_raw_parts(payload, payload_len) }
+    };
+
+    IN_FLIGHT.with(|in_flight| {
+        let mut in_flight = in_flight.borrow_mut();
+        // Innermost first, so a re-entrant embedder answers the control it was handed.
+        let Some(slot) = in_flight
+            .iter_mut()
+            .rev()
+            .find(|slot| std::ptr::eq(slot.view, view))
+        else {
+            return false;
+        };
+        let Some(embedder_control) = slot.control.take() else {
+            return false;
+        };
+
+        // Sending a response only hands a message to the constellation, so this cannot
+        // re-enter `IN_FLIGHT` while the borrow above is held.
+        match send_control_response(embedder_control, payload) {
+            Ok(()) => true,
+            Err(embedder_control) => {
+                // Undecodable payload: put the control back so that declining it from
+                // `on_control` still reaches Servo's default path.
+                slot.control = Some(embedder_control);
+                false
+            },
+        }
+    })
+}
+
+/// Generic embedder control extension, no domain logic.
+///
+/// Answer the embedder control that is currently being offered to
+/// [`ServoEmbedderController::on_control`], instead of the default response that Servo
+/// would otherwise send for it.
+///
+/// `control` is the pointer that `on_control` received. A successful call consumes the
+/// control: the response is sent, Servo sends no default response for it, and the control
+/// does not follow Servo's default path even if `on_control` goes on to return `false`.
+///
+/// This is transport only. Servo does not inspect the origin of the control and applies
+/// no policy to the response; deciding which controls may be answered, and with what, is
+/// the embedder's job.
+///
+/// # Payload
+///
+/// `payload` is a fixed wire format that depends on the control's tag. Integers are
+/// little-endian.
+///
+/// - `SERVO_EMBEDDER_CONTROL_TAG_CONTEXT_MENU`: empty for a dismissal with no selection,
+///   or one `uint32_t` [`ServoContextMenuAction`] code for a selection.
+/// - `SERVO_EMBEDDER_CONTROL_TAG_SELECT`: zero or more `uint32_t` indices into the
+///   flattened option list of the `<select>`, which replace its selection. An empty
+///   payload deselects every option. More than one index is only accepted for a
+///   `<select multiple>`.
+/// - `SERVO_EMBEDDER_CONTROL_TAG_FILE_PICKER`: empty, for a dismissal with no files.
+///   Selecting files is not expressible on this wire format.
+///
+/// # Return value
+///
+/// `true` if the response was sent and the control consumed. `false` if it was not, in
+/// which case nothing has been sent and the control is left exactly as it was: the
+/// embedder can still return `false` from `on_control` to hand it back to Servo. A call
+/// returns `false` when `control` is `NULL` or does not name a control currently being
+/// offered on this thread, when that control has already been answered, or when `payload`
+/// does not decode for that kind of control.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - This is called from inside `on_control`, on the same thread, with the `control`
+///   pointer that call received, and not after it has returned.
+/// - `payload` is either `NULL` with a `payload_len` of zero, or valid for reads of
+///   `payload_len` bytes for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_send_response(
+    control: *const ServoEmbedderControl,
+    payload: *const u8,
+    payload_len: usize,
+) -> bool {
+    // A panic must not unwind into the embedder's C frame. Containing it here also keeps
+    // the control unclaimed, so the caller can still fall back to Servo's default path.
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: The caller is assumed to uphold the safety requirements documented
+        // above, which include those of `claim_and_respond`.
+        unsafe { claim_and_respond(control, payload, payload_len) }
+    }))
+    .unwrap_or(false)
 }
 
 /// Take no control; every control follows Servo's default path.
@@ -277,3 +589,102 @@ pub const SERVO_EMBEDDER_CONTROL_WASM_IMPORT: u64 = 1 << 3;
 pub const SERVO_EMBEDDER_CONTROL_WEBMCP: u64 = 1 << 4;
 /// Take every taggable control, including bits not yet assigned.
 pub const SERVO_EMBEDDER_CONTROL_ALL: u64 = 0xFFFF_FFFF;
+
+#[cfg(test)]
+mod tests {
+    use servo_api::{ContextMenuAction, SelectElementOption, SelectElementOptionOrOptgroup};
+
+    use super::{
+        ServoContextMenuAction, ServoEmbedderControl, ServoEmbedderControlTag, context_menu_action,
+        decode_u32s, flattened_option_count, servo_webview_send_response,
+    };
+
+    fn option(label: &str) -> SelectElementOption {
+        SelectElementOption {
+            id: Default::default(),
+            label: label.to_owned(),
+            is_disabled: false,
+        }
+    }
+
+    #[test]
+    fn decodes_little_endian_u32s() {
+        assert_eq!(decode_u32s(&[]), Some(vec![]));
+        assert_eq!(decode_u32s(&[1, 0, 0, 0]), Some(vec![1]));
+        assert_eq!(decode_u32s(&[1, 0, 0, 0, 2, 0, 0, 0]), Some(vec![1, 2]));
+
+        // A payload that is not a whole number of `u32`s is rejected rather than
+        // truncated, so a malformed response never reaches web content.
+        assert_eq!(decode_u32s(&[1]), None);
+        assert_eq!(decode_u32s(&[1, 0, 0]), None);
+        assert_eq!(decode_u32s(&[1, 0, 0, 0, 2]), None);
+    }
+
+    #[test]
+    fn context_menu_action_codes_are_total_and_bounded() {
+        assert_eq!(context_menu_action(0), None);
+        assert_eq!(context_menu_action(12), None);
+        assert_eq!(context_menu_action(u32::MAX), None);
+
+        assert_eq!(context_menu_action(1), Some(ContextMenuAction::GoBack));
+        assert_eq!(context_menu_action(11), Some(ContextMenuAction::SelectAll));
+        assert_eq!(
+            context_menu_action(ServoContextMenuAction::Copy as u32),
+            Some(ContextMenuAction::Copy)
+        );
+    }
+
+    #[test]
+    fn option_count_flattens_optgroups() {
+        // The index space of a select response is the flattened option list, not the
+        // group-or-option list, so bounds checks have to flatten too.
+        let options = vec![
+            SelectElementOptionOrOptgroup::Option(option("a")),
+            SelectElementOptionOrOptgroup::Optgroup {
+                label: "group".to_owned(),
+                options: vec![option("b"), option("c")],
+            },
+            SelectElementOptionOrOptgroup::Option(option("d")),
+        ];
+
+        assert_eq!(options.len(), 3);
+        assert_eq!(flattened_option_count(&options), 4);
+        assert_eq!(flattened_option_count(&[]), 0);
+    }
+
+    #[test]
+    fn responding_without_a_live_control_is_refused() {
+        // There is no control in flight on this thread, so every call must decline and
+        // leave the embedder free to fall back to Servo's default path.
+        let payload = (ServoContextMenuAction::Copy as u32).to_le_bytes();
+
+        // SAFETY: A null control, and a payload that is either empty or a valid slice.
+        unsafe {
+            assert!(!servo_webview_send_response(
+                std::ptr::null(),
+                payload.as_ptr(),
+                payload.len()
+            ));
+
+            let control = ServoEmbedderControl {
+                tag: ServoEmbedderControlTag::ContextMenu as u32,
+                origin_ptr: std::ptr::null(),
+                origin_len: 0,
+                payload_ptr: std::ptr::null(),
+                payload_len: 0,
+            };
+            assert!(!servo_webview_send_response(
+                &control as *const ServoEmbedderControl,
+                payload.as_ptr(),
+                payload.len()
+            ));
+
+            // A non-null length with a null payload is refused rather than dereferenced.
+            assert!(!servo_webview_send_response(
+                &control as *const ServoEmbedderControl,
+                std::ptr::null(),
+                4
+            ));
+        }
+    }
+}

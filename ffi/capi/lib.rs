@@ -274,7 +274,9 @@ pub unsafe extern "C" fn servo_builder_free(builder: *mut ServoBuilder) {
 #[cfg(test)]
 mod tests {
     use super::ServoEventLoopWaker;
-    use crate::webview_delegate::ServoWebViewDelegate;
+    use crate::webview_delegate::{
+        ServoEmbedderControl, ServoEmbedderController, ServoWebViewDelegate,
+    };
 
     /// Generic embedder control extension, no domain logic.
     ///
@@ -283,12 +285,16 @@ mod tests {
     #[test]
     fn abi_struct_sizes() {
         println!(
-            "waker={} delegate={}",
+            "waker={} delegate={} controller={} control={}",
             size_of::<ServoEventLoopWaker>(),
-            size_of::<ServoWebViewDelegate>()
+            size_of::<ServoWebViewDelegate>(),
+            size_of::<ServoEmbedderController>(),
+            size_of::<ServoEmbedderControl>()
         );
 
         assert_eq!(size_of::<ServoEventLoopWaker>(), 16);
         assert_eq!(size_of::<ServoWebViewDelegate>(), 32);
+        assert_eq!(size_of::<ServoEmbedderController>(), 16);
+        assert_eq!(size_of::<ServoEmbedderControl>(), 40);
     }
 }
