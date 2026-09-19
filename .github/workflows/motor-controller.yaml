@@ -116,6 +116,27 @@ jobs:
         run: |
           $rel = "$env:CARGO_TARGET_DIR\release"
           Copy-Item "$rel\servo_capi_full.dll" "$rel\servo.dll" -Force
+
+          # mozangle's build script emits ANGLE's pair under
+          # `<profile>/build/mozangle-<hash>/out`, and nothing in cargo moves
+          # them next to the other artifacts. `mach build` copies them itself
+          # (copy_windows_dlls_to_build_directory in
+          # python/servo/build_commands.py), as does tests/capi/build.rs; this
+          # job runs raw cargo, so it has to do the same copy. Several
+          # `mozangle-*` directories can exist when dependents resolve
+          # different feature sets - they all build the same ANGLE, so take
+          # the most recent.
+          foreach ($dll in "libEGL.dll", "libGLESv2.dll") {
+            $built = Get-ChildItem "$rel\build" -Filter $dll -Recurse -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+            if (-not $built) {
+              Write-Host "::error::$dll was not built under $rel\build"
+              exit 1
+            }
+            Copy-Item $built.FullName "$rel\$dll" -Force
+          }
+
           Get-ChildItem "$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll" |
             Select-Object Name, Length
 
