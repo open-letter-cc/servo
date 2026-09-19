@@ -326,8 +326,8 @@ impl InterceptedWebResourceLoad {
 
 impl Drop for InterceptedWebResourceLoad {
     fn drop(&mut self) {
-        if !self.finished &&
-            let Err(error) = self
+        if !self.finished
+            && let Err(error) = self
                 .response_sender
                 .send(WebResourceResponseMsg::FinishLoad)
         {
@@ -370,7 +370,65 @@ impl EmbedderControl {
             EmbedderControl::ContextMenu(context_menu) => context_menu.id,
         }
     }
+
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// The [`EmbedderControlTag`] for this control, or `None` if this kind of control has no
+    /// tag assigned and therefore always follows Servo's default path.
+    pub fn tag(&self) -> Option<EmbedderControlTag> {
+        match self {
+            EmbedderControl::ContextMenu(..) => Some(EmbedderControlTag::ContextMenu),
+            EmbedderControl::SelectElement(..) => Some(EmbedderControlTag::Select),
+            EmbedderControl::FilePicker(..) => Some(EmbedderControlTag::FilePicker),
+            EmbedderControl::ColorPicker(..)
+            | EmbedderControl::InputMethod(..)
+            | EmbedderControl::SimpleDialog(..) => None,
+        }
+    }
 }
+
+/// Generic embedder control extension, no domain logic.
+///
+/// A stable tag for the kinds of [`EmbedderControl`] an embedder may choose to take
+/// ownership of, plus tags reserved for controls that the embedder itself originates.
+/// Servo attaches no meaning to a tag beyond routing: it never inspects the origin of a
+/// control and never parses its payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum EmbedderControlTag {
+    /// A context menu opened on web content.
+    ContextMenu = 1,
+    /// The picker of a `<select>` element.
+    Select = 2,
+    /// The picker of an `<input type=file>` element.
+    FilePicker = 3,
+    /// Reserved for embedder-originated controls. Servo never emits this tag.
+    WasmImport = 4,
+    /// Reserved for embedder-originated controls. Servo never emits this tag.
+    WebMcpToolCall = 5,
+}
+
+impl EmbedderControlTag {
+    /// The bit this tag occupies in an [`WebViewDelegate::embedder_control_flags`] mask.
+    pub fn bit(self) -> u64 {
+        1 << (self as u32 - 1)
+    }
+}
+
+/// Take no control; every [`EmbedderControl`] follows Servo's default path.
+pub const EMBEDDER_CONTROL_NONE: u64 = 0;
+/// See [`EmbedderControlTag::ContextMenu`].
+pub const EMBEDDER_CONTROL_CONTEXT_MENU: u64 = 1 << 0;
+/// See [`EmbedderControlTag::Select`].
+pub const EMBEDDER_CONTROL_SELECT: u64 = 1 << 1;
+/// See [`EmbedderControlTag::FilePicker`].
+pub const EMBEDDER_CONTROL_FILE_PICKER: u64 = 1 << 2;
+/// See [`EmbedderControlTag::WasmImport`].
+pub const EMBEDDER_CONTROL_WASM_IMPORT: u64 = 1 << 3;
+/// See [`EmbedderControlTag::WebMcpToolCall`].
+pub const EMBEDDER_CONTROL_WEBMCP: u64 = 1 << 4;
+/// Take every taggable control, including bits not yet assigned.
+pub const EMBEDDER_CONTROL_ALL: u64 = 0xFFFF_FFFF;
 
 /// Represents a context menu opened on web content.
 pub struct ContextMenu {
@@ -1053,6 +1111,39 @@ pub trait WebViewDelegate {
     /// Request that the embedder show UI elements for form controls that are not integrated
     /// into page content, such as dropdowns for `<select>` elements.
     fn show_embedder_control(&self, _webview: WebView, _embedder_control: EmbedderControl) {}
+
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// A bitmask of `EMBEDDER_CONTROL_*` bits naming the [`EmbedderControlTag`]s this
+    /// embedder wants routed to [`WebViewDelegate::handle_embedder_control`] instead of
+    /// [`WebViewDelegate::show_embedder_control`]. The default,
+    /// [`EMBEDDER_CONTROL_NONE`], keeps Servo's behaviour unchanged for every control.
+    fn embedder_control_flags(&self) -> u64 {
+        EMBEDDER_CONTROL_NONE
+    }
+
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// Called instead of [`WebViewDelegate::show_embedder_control`] when the control's
+    /// [`EmbedderControlTag`] bit is set in [`WebViewDelegate::embedder_control_flags`].
+    ///
+    /// Return `None` to report the control as handled: the embedder has taken
+    /// responsibility for it, and Servo does nothing further. Return
+    /// `Some(embedder_control)` to decline it, which hands it back to Servo to follow the
+    /// ordinary [`WebViewDelegate::show_embedder_control`] path.
+    ///
+    /// Note that a control reported as handled is dropped by Servo, and dropping a control
+    /// sends its default response (a dismissal, or the current selection). An embedder that
+    /// takes over a control's *user interface* should therefore decline it here and drive
+    /// the typed control from `show_embedder_control` instead; reporting it as handled is
+    /// for embedders that want the control suppressed.
+    fn handle_embedder_control(
+        &self,
+        _webview: WebView,
+        embedder_control: EmbedderControl,
+    ) -> Option<EmbedderControl> {
+        Some(embedder_control)
+    }
 
     /// Request that the embedder hide and ignore a previous [`EmbedderControl`] request, if it hasn’t
     /// already responded to it.

@@ -886,8 +886,34 @@ impl WebView {
             },
         };
 
-        self.delegate()
-            .show_embedder_control(self.clone(), embedder_control);
+        self.dispatch_embedder_control(embedder_control);
+    }
+
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// Route `embedder_control` to the delegate. A control whose
+    /// [`EmbedderControlTag`](crate::webview_delegate::EmbedderControlTag) bit is set in
+    /// [`WebViewDelegate::embedder_control_flags`] is offered to
+    /// [`WebViewDelegate::handle_embedder_control`] first; everything else, and anything the
+    /// delegate declines, follows the ordinary
+    /// [`WebViewDelegate::show_embedder_control`] path.
+    pub(crate) fn dispatch_embedder_control(&self, embedder_control: EmbedderControl) {
+        let delegate = self.delegate();
+
+        let taken_by_embedder = embedder_control
+            .tag()
+            .is_some_and(|tag| delegate.embedder_control_flags() & tag.bit() != 0);
+        if !taken_by_embedder {
+            delegate.show_embedder_control(self.clone(), embedder_control);
+            return;
+        }
+
+        // The embedder returns the control to us if it declined to handle it.
+        if let Some(embedder_control) =
+            delegate.handle_embedder_control(self.clone(), embedder_control)
+        {
+            delegate.show_embedder_control(self.clone(), embedder_control);
+        }
     }
 
     /// AccessKit subtree id for this [`WebView`], if accessibility is active.
