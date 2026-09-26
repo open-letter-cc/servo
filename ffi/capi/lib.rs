@@ -14,6 +14,27 @@ extern crate servo as servo_api;
 use options::ServoOptions;
 use preferences::ServoPreferences;
 
+/// The ABI version of this capi surface.
+///
+/// This is incremented whenever a struct layout, an enum's numbering, or a
+/// function signature exported by this crate changes in a way that is not
+/// purely additive (a struct growing new fields at its end, in a way an
+/// embedder built against an older header cannot misread as an existing
+/// field, does not require a bump; changing an existing field's meaning,
+/// reordering fields, or removing one does).
+///
+/// Embedders should call [`servo_capi_abi_version`] once, before constructing
+/// any struct defined by this crate, and refuse to proceed if it disagrees
+/// with the version their own headers were generated against, rather than
+/// reading a struct whose shape they have guessed wrong.
+pub const SERVO_CAPI_ABI_VERSION: u32 = 1;
+
+/// Returns the ABI version of this capi build. See [`SERVO_CAPI_ABI_VERSION`].
+#[unsafe(no_mangle)]
+pub extern "C" fn servo_capi_abi_version() -> u32 {
+    SERVO_CAPI_ABI_VERSION
+}
+
 /// An opaque struct representing builder for a `Servo` instance.
 /// Refer to the documentation of the corresponding
 /// [servo::ServoBuilder] struct in Rust API for more information.
@@ -293,7 +314,7 @@ mod tests {
         );
 
         assert_eq!(size_of::<ServoEventLoopWaker>(), 16);
-        assert_eq!(size_of::<ServoWebViewDelegate>(), 32);
+        assert_eq!(size_of::<ServoWebViewDelegate>(), 64);
         assert_eq!(size_of::<ServoEmbedderController>(), 16);
         assert_eq!(size_of::<ServoEmbedderControl>(), 40);
     }

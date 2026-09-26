@@ -71,11 +71,76 @@ pub struct ServoWebViewDelegate {
     /// keep Servo's default behaviour for every embedder control. See
     /// [`ServoEmbedderController`] for the safety requirements on its fields.
     pub embedder_control: *const ServoEmbedderController,
+
+    /// Called when the `WebView`'s content process has crashed.
+    ///
+    /// Without this callback, an in-process embedder has no signal at all when
+    /// content stops responding: there is no separate process to observe dying.
+    ///
+    /// `reason_ptr`/`reason_len` describe the crash and are always present.
+    /// `backtrace_ptr`/`backtrace_len` are a backtrace, or `NULL`/`0` if none
+    /// is available. Both are borrowed for the duration of this call only,
+    /// are not NUL-terminated, and are not valid UTF-8 unless the embedder
+    /// checks them (Servo always produces valid UTF-8 here, but the ABI does
+    /// not promise it). The embedder must copy the bytes if it needs to
+    /// retain them past the call.
+    pub notify_crashed: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            reason_ptr: *const u8,
+            reason_len: usize,
+            backtrace_ptr: *const u8,
+            backtrace_len: usize,
+            user_data: *mut c_void,
+        ),
+    >,
+
+    /// Called when the `WebView` has closed. No further callbacks will be
+    /// delivered for it after this one returns.
+    pub notify_closed:
+        Option<unsafe extern "C" fn(webview: *mut WebView, user_data: *mut c_void)>,
+
+    /// Called when content running in this `WebView` logs a console message.
+    ///
+    /// `level` is one of the `SERVO_CONSOLE_LOG_LEVEL_*` constants.
+    /// `message_ptr`/`message_len` are the message text, borrowed for the
+    /// duration of this call only and not NUL-terminated. The embedder must
+    /// copy the bytes if it needs to retain them past the call.
+    pub show_console_message: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            level: i32,
+            message_ptr: *const u8,
+            message_len: usize,
+            user_data: *mut c_void,
+        ),
+    >,
+
+    /// Called when the `WebView` navigates to a new URL, including
+    /// page-initiated navigation (a link click, `location =`, and similar)
+    /// as well as host-initiated navigation via `servo_webview_load`.
+    ///
+    /// `url_ptr`/`url_len` are the URL's serialization, borrowed for the
+    /// duration of this call only and not NUL-terminated. The embedder must
+    /// copy the bytes if it needs to retain them past the call.
+    pub notify_url_changed: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            url_ptr: *const u8,
+            url_len: usize,
+            user_data: *mut c_void,
+        ),
+    >,
 }
 
+// Adding a field here changes this number. Update it deliberately, state the
+// new size in the specification as part of the ABI contract, and append new
+// fields after the existing ones rather than reordering, so that a caller
+// built against an older header fails by reading a struct that is too short
+// rather than by misreading an existing field.
 const _: () = assert!(
-    size_of::<ServoWebViewDelegate>() == 32,
-    "ServoWebViewDelegate must stay 32 bytes wide"
+    size_of::<ServoWebViewDelegate>() == 64,
+    "ServoWebViewDelegate must stay 64 bytes wide"
 );
 
 impl WebViewDelegate for ServoWebViewDelegate {
@@ -103,6 +168,98 @@ impl WebViewDelegate for ServoWebViewDelegate {
         //
         // The `webview` raw pointer is derived from a valid `webview` handle.
         unsafe { callback(&mut webview as *mut WebView, self.user_data) };
+    }
+
+    fn notify_crashed(&self, mut webview: WebView, reason: String, backtrace: Option<String>) {
+        let Some(callback) = self.notify_crashed else {
+            return;
+        };
+
+        let (backtrace_ptr, backtrace_len) = match &backtrace {
+            Some(backtrace) => (backtrace.as_ptr(), backtrace.len()),
+            None => (std::ptr::null(), 0),
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        // `reason` and `backtrace` outlive the call, so the borrowed pointers into
+        // them remain valid for its duration.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                reason.as_ptr(),
+                reason.len(),
+                backtrace_ptr,
+                backtrace_len,
+                self.user_data,
+            )
+        };
+    }
+
+    fn notify_closed(&self, mut webview: WebView) {
+        let Some(callback) = self.notify_closed else {
+            return;
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        unsafe { callback(&mut webview as *mut WebView, self.user_data) };
+    }
+
+    fn show_console_message(
+        &self,
+        mut webview: WebView,
+        level: servo_api::ConsoleLogLevel,
+        message: String,
+    ) {
+        let Some(callback) = self.show_console_message else {
+            return;
+        };
+
+        let level = console_log_level_to_c(&level);
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `message` outlives the call, so the borrowed pointer into it remains
+        // valid for its duration.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                level,
+                message.as_ptr(),
+                message.len(),
+                self.user_data,
+            )
+        };
+    }
+
+    fn notify_url_changed(&self, mut webview: WebView, url: url::Url) {
+        let Some(callback) = self.notify_url_changed else {
+            return;
+        };
+
+        let url = url.as_str();
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `url` outlives the call, so the borrowed pointer into it remains valid
+        // for its duration.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                url.as_ptr(),
+                url.len(),
+                self.user_data,
+            )
+        };
     }
 
     fn embedder_control_flags(&self) -> u64 {
@@ -589,6 +746,41 @@ pub const SERVO_EMBEDDER_CONTROL_WASM_IMPORT: u64 = 1 << 3;
 pub const SERVO_EMBEDDER_CONTROL_WEBMCP: u64 = 1 << 4;
 /// Take every taggable control, including bits not yet assigned.
 pub const SERVO_EMBEDDER_CONTROL_ALL: u64 = 0xFFFF_FFFF;
+
+/// The severity of a message logged by page content, passed to
+/// [`ServoWebViewDelegate::show_console_message`].
+///
+/// `servo_api::ConsoleLogLevel` carries no `#[repr]`, so its Rust layout is
+/// not part of any ABI. These constants and [`console_log_level_to_c`] are
+/// this crate's own stable numbering, kept in sync with the Rust enum by an
+/// exhaustive match rather than by a numeric cast.
+pub const SERVO_CONSOLE_LOG_LEVEL_LOG: i32 = 0;
+pub const SERVO_CONSOLE_LOG_LEVEL_DEBUG: i32 = 1;
+pub const SERVO_CONSOLE_LOG_LEVEL_INFO: i32 = 2;
+pub const SERVO_CONSOLE_LOG_LEVEL_WARN: i32 = 3;
+pub const SERVO_CONSOLE_LOG_LEVEL_ERROR: i32 = 4;
+pub const SERVO_CONSOLE_LOG_LEVEL_TRACE: i32 = 5;
+pub const SERVO_CONSOLE_LOG_LEVEL_DIR: i32 = 6;
+
+/// Converts a [`servo_api::ConsoleLogLevel`] to one of the
+/// `SERVO_CONSOLE_LOG_LEVEL_*` constants.
+///
+/// An exhaustive match, not a cast: `ConsoleLogLevel` has no stable repr, so
+/// this is the only sound way to produce a value that means the same thing on
+/// both sides of the ABI. Adding a variant upstream is a compile error here
+/// rather than a silent renumbering.
+fn console_log_level_to_c(level: &servo_api::ConsoleLogLevel) -> i32 {
+    use servo_api::ConsoleLogLevel::*;
+    match level {
+        Log => SERVO_CONSOLE_LOG_LEVEL_LOG,
+        Debug => SERVO_CONSOLE_LOG_LEVEL_DEBUG,
+        Info => SERVO_CONSOLE_LOG_LEVEL_INFO,
+        Warn => SERVO_CONSOLE_LOG_LEVEL_WARN,
+        Error => SERVO_CONSOLE_LOG_LEVEL_ERROR,
+        Trace => SERVO_CONSOLE_LOG_LEVEL_TRACE,
+        Dir => SERVO_CONSOLE_LOG_LEVEL_DIR,
+    }
+}
 
 #[cfg(test)]
 mod tests {
