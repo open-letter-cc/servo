@@ -80,3 +80,7 @@ justfile
 
 # devcontainer
 devcontainer-lock.json
+
+# Embedder FFI contract working folder: shared out-of-band, never distributed
+# with this MPL-2.0 tree.
+ffi-contract/
