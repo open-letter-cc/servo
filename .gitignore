@@ -84,3 +84,6 @@ devcontainer-lock.json
 # Embedder FFI contract working folder: shared out-of-band, never distributed
 # with this MPL-2.0 tree.
 ffi-contract/
+
+# Agent orientation notes: local-only, references out-of-tree correspondence.
+CLAUDE.md
