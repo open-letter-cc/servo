@@ -58,7 +58,9 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -qy --no-install-recommends mesa-vulkan-drivers
-          ./mach bootstrap --skip-lints
+          ./mach bootstrap --yes --skip-lints --skip-nextest
+          # FIXME #35029
+          sudo apt purge -y fonts-droid-fallback
       - name: Sync from upstream WPT
         if: ${{ inputs.wpt-sync-from-upstream }}
         run: |

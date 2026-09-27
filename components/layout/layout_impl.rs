@@ -1036,11 +1036,8 @@ impl LayoutThread {
             .as_document()
             .unwrap();
         let Some(root_element) = document.root_element() else {
-            if !self.last_display_list_was_empty.get() {
-                return self.clear_layout_trees_and_send_empty_display_list(&reflow_request);
-            }
             debug!("layout: No root node: bailing");
-            return None;
+            return self.maybe_clear_layout_trees_and_send_empty_display_list(&reflow_request);
         };
 
         let image_resolver = Arc::new(ImageResolver {
@@ -1532,11 +1529,15 @@ impl LayoutThread {
             &self.debug,
             paint_timing_handler,
             reflow_statistics,
+            reflow_request.frame_focused,
         );
 
         stacking_context_tree.paint_info.paint_timing_info = reflow_request.paint_timing_info;
-        stacking_context_tree.paint_info.paint_timing_report =
-            paint_timing_handler.mark_paint_timing(reflow_request.halt_lcp);
+        stacking_context_tree.paint_info.paint_timing_report = paint_timing_handler
+            .mark_paint_timing(
+                reflow_request.paint_timing_eligible,
+                reflow_request.halt_lcp,
+            );
 
         if let Some(lcp_candidate) = paint_timing_handler.largest_contentful_paint_candidate() {
             stacking_context_tree.paint_info.lcp_candidate =
@@ -1622,8 +1623,8 @@ impl LayoutThread {
         })
     }
 
-    /// Clear all cached layout trees and send an empty display list to paint.
-    fn clear_layout_trees_and_send_empty_display_list(
+    /// Clear all cached layout trees and send an empty display list to paint (if necessary).
+    fn maybe_clear_layout_trees_and_send_empty_display_list(
         &self,
         reflow_request: &ReflowRequest,
     ) -> Option<ReflowResult> {
@@ -1631,6 +1632,12 @@ impl LayoutThread {
         self.box_tree.borrow_mut().take();
         self.fragment_tree.borrow_mut().take();
         self.stacking_context_tree.borrow_mut().take();
+        self.need_new_display_list.set(false);
+
+        // If the last display list was also empty a new one is not necessary.
+        if self.last_display_list_was_empty.get() {
+            return None;
+        }
 
         // Send empty display list.
         let paint_info = PaintDisplayListInfo::new(
@@ -1812,7 +1819,7 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
 
         let Some(first_font_metrics) = font_group
             .first(font_context)
-            .map(|font| font.metrics.clone())
+            .map(|font| font.metrics().clone())
         else {
             return Default::default();
         };
@@ -1828,7 +1835,7 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
             .or_else(|| {
                 font_group
                     .find_by_codepoint(font_context, '0', None, Language::UNKNOWN)?
-                    .metrics
+                    .metrics()
                     .zero_horizontal_advance
             })
             .map(CSSPixelLength::from);
@@ -1838,7 +1845,7 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
             .or_else(|| {
                 font_group
                     .find_by_codepoint(font_context, '\u{6C34}', None, Language::UNKNOWN)?
-                    .metrics
+                    .metrics()
                     .ic_horizontal_advance
             })
             .map(CSSPixelLength::from);

@@ -7,8 +7,8 @@
 use std::cell::Cell;
 
 use embedder_traits::{
-    ContextMenuAction, ContextMenuElementInformation, ContextMenuElementInformationFlags,
-    ContextMenuItem, ContextMenuRequest, EditingActionEvent, EmbedderControlId,
+    ClipboardAction, ContextMenuAction, ContextMenuElementInformation,
+    ContextMenuElementInformationFlags, ContextMenuItem, ContextMenuRequest, EmbedderControlId,
     EmbedderControlRequest, EmbedderControlResponse, EmbedderMsg,
 };
 use euclid::{Point2D, Rect, Size2D};
@@ -466,7 +466,7 @@ impl ContextMenuNodes {
                 let _ = window.History(cx).Forward();
             },
             ContextMenuAction::Reload => {
-                window.Location(cx).reload_without_origin_check(cx);
+                window.Location(cx).reload_without_origin_check(cx, &window);
             },
             ContextMenuAction::CopyLink => {
                 let Some(anchor_element) = &self.anchor_element else {
@@ -508,13 +508,16 @@ impl ContextMenuNodes {
                 }
             },
             ContextMenuAction::Cut => {
-                document.handle_editing_action(cx, &self.node, EditingActionEvent::Cut);
+                let editing_context = document.editing_context(cx.no_gc(), &self.node);
+                document.handle_clipboard_action(cx, &editing_context, ClipboardAction::Cut);
             },
             ContextMenuAction::Copy => {
-                document.handle_editing_action(cx, &self.node, EditingActionEvent::Copy);
+                let editing_context = document.editing_context(cx.no_gc(), &self.node);
+                document.handle_clipboard_action(cx, &editing_context, ClipboardAction::Copy);
             },
             ContextMenuAction::Paste => {
-                document.handle_editing_action(cx, &self.node, EditingActionEvent::Paste);
+                let editing_context = document.editing_context(cx.no_gc(), &self.node);
+                document.handle_clipboard_action(cx, &editing_context, ClipboardAction::Paste);
             },
             ContextMenuAction::SelectAll => {
                 let editing_context = document.editing_context(cx.no_gc(), &self.node);

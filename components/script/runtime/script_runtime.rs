@@ -90,6 +90,7 @@ use crate::dom::promise::Promise;
 use crate::dom::promiserejectionevent::PromiseRejectionEvent;
 use crate::dom::response::Response;
 use crate::dom::trustedtypes::trustedscript::TrustedScript;
+use crate::dom::window::Window;
 use crate::engine::handle::current_js_engine_handle;
 use crate::messaging::{CommonScriptMsg, ScriptEventLoopSender};
 use crate::modules::script_module::EnsureModuleHooksInitialized;
@@ -295,7 +296,7 @@ unsafe extern "C" fn promise_rejection_tracker(
                 let target = Trusted::new(global.upcast::<EventTarget>());
                 let promise =
                     Promise::new_with_js_promise(cx, unsafe { Handle::from_raw(promise) });
-                let trusted_promise = TrustedPromise::new(promise);
+                let trusted_promise = TrustedPromise::from(&promise);
 
                 // Step 5-4.
                 global.task_manager().dom_manipulation_task_source().queue(
@@ -341,9 +342,14 @@ unsafe extern "C" fn code_for_eval_gets(
     code_for_eval: MutableHandleString,
 ) -> bool {
     // SAFETY: We are in SM hook
-    let mut cx = unsafe { JSContext::from_ptr(NonNull::new(cx).unwrap()) };
+    let (mut cx, code) = unsafe {
+        (
+            JSContext::from_ptr(NonNull::new(cx).unwrap()),
+            RustHandleObject::from_raw(code),
+        )
+    };
     let cx = &mut cx;
-    if let Ok(trusted_script) = unsafe { root_from_object::<TrustedScript>(cx, code.get()) } {
+    if let Ok(trusted_script) = root_from_handleobject::<TrustedScript>(cx, code) {
         let script_str = trusted_script.data().str();
         let s = js::conversions::Utf8Chars::from(&*script_str);
         let new_string = unsafe { JS_NewStringCopyUTF8N(cx, &*s as *const _) };
@@ -457,7 +463,7 @@ pub(crate) fn notify_about_rejected_promises(cx: &mut JSContext, global: &Global
                 let promise =
                     Promise::new_with_js_promise(cx, unsafe { Handle::from_raw(promise.handle()) });
 
-                TrustedPromise::new(promise)
+                TrustedPromise::from(&promise)
             })
             .collect()
     };
@@ -903,6 +909,8 @@ struct GlobalSizeData {
     url: ServoUrl,
     /// A map of WebIDL interface names to size information.
     interface_sizes: HashMap<&'static str, InterfaceSizeData>,
+    /// Is this global considered dead?
+    is_zombie: bool,
 }
 
 #[derive(Default)]
@@ -1079,6 +1087,9 @@ pub(crate) fn compute_size(
                     GlobalSizeData {
                         url: global.get_url(),
                         interface_sizes: HashMap::new(),
+                        is_zombie: global
+                            .downcast::<Window>()
+                            .is_some_and(|window| !window.is_alive()),
                     }
                 })
                 .interface_sizes
@@ -1129,14 +1140,22 @@ pub(crate) fn get_reports(
 
     DOM_OBJECT_SIZES.with(|sizes| {
         let mut sizes = sizes.borrow_mut();
+        let mut known_globals = HashMap::new();
         for global_size_data in sizes.0.values() {
             let url = global_size_data.url.as_str();
+            let suffix = if global_size_data.is_zombie {
+                "-zombie"
+            } else {
+                ""
+            };
+            let index = known_globals.entry(url).or_insert(0);
+            *index += 1;
             for (interface, interface_data) in &global_size_data.interface_sizes {
                 report(
                     path![
                         "dom",
                         "out-of-tree",
-                        format!("url({url})"),
+                        format!("url({url}){suffix}-{}", *index),
                         format!("{interface} [{}]", interface_data.count)
                     ],
                     ReportKind::ExplicitJemallocHeapSize,

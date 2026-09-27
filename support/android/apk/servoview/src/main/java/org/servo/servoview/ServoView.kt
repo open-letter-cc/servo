@@ -12,8 +12,6 @@ import android.os.Looper
 import android.util.Log
 import android.util.Size
 import android.view.Choreographer
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 
@@ -25,17 +23,15 @@ class ServoView(
     servoLog: String?,
     private val experimentalMode: Boolean,
     private val initialUri: String?,
-    navigator: ServoNavigator,
+    internal val navigator: ServoNavigator,
 ) : SurfaceView(context), Servo.RunCallback, Choreographer.FrameCallback {
-    private val glThread: GLThread
-    private var servo: Servo? = null
+    private val glThread = GLThread().apply { start() }
+    internal var servo: Servo? = null
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-        isClickable = true
         addTouchables(arrayListOf(this))
-        glThread = GLThread()
         val surfaceHolderCallback =
             SurfaceHolderCallback(
                 servoView = this,
@@ -45,7 +41,6 @@ class ServoView(
                 navigator = navigator,
             )
         holder.addCallback(surfaceHolderCallback)
-        glThread.start()
     }
 
     override fun inGLThread(r: Runnable) {
@@ -56,66 +51,9 @@ class ServoView(
         post(r)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (event.keyCode != KeyEvent.KEYCODE_BACK) {
-            servo!!.onKeyDown(keyCode, event)
-            return true
-        }
-        return false
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (event.keyCode != KeyEvent.KEYCODE_BACK) {
-            servo!!.onKeyUp(keyCode, event)
-            return true
-        }
-        return false
-    }
-
-    override fun onTouchEvent(motionEvent: MotionEvent): Boolean {
-        requestFocus()
-
-        val action = motionEvent.actionMasked
-        val pointerIndex = motionEvent.actionIndex
-        val pointerId = motionEvent.getPointerId(pointerIndex)
-        val x = motionEvent.getX(pointerIndex)
-        val y = motionEvent.getY(pointerIndex)
-
-        when (action) {
-            MotionEvent.ACTION_DOWN,
-            MotionEvent.ACTION_POINTER_DOWN -> servo!!.touchDown(x, y, pointerId)
-            MotionEvent.ACTION_MOVE -> servo!!.touchMove(x, y, pointerId)
-            MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_POINTER_UP -> servo!!.touchUp(x, y, pointerId)
-            MotionEvent.ACTION_CANCEL -> servo!!.touchCancel(x, y, pointerId)
-        }
-
-        return true
-    }
-
     override fun doFrame(frameTimeNanos: Long) {
         servo?.onDoFrame()
         Choreographer.getInstance().postFrameCallback(this)
-    }
-
-    internal fun onPause() {
-        servo?.suspend(true)
-    }
-
-    internal fun onResume() {
-        servo?.suspend(false)
-    }
-
-    fun reload() {
-        servo!!.reload()
-    }
-
-    fun goBack() {
-        servo!!.goBack()
-    }
-
-    fun goForward() {
-        servo!!.goForward()
     }
 
     fun stop() {

@@ -1900,9 +1900,9 @@ impl Node {
 
         let num_children = if is_shadow_host {
             // Shadow roots count as children
-            self.ChildNodes(cx).Length() as usize + 1
+            self.ChildNodes(cx).Length(cx.no_gc()) as usize + 1
         } else {
-            self.ChildNodes(cx).Length() as usize
+            self.ChildNodes(cx).Length(cx.no_gc()) as usize
         };
 
         let window = self.owner_window();
@@ -4601,10 +4601,12 @@ impl VirtualMethods for Node {
             return;
         }
 
-        if let Some(event) = event.downcast::<KeyboardEvent>() {
+        if event.type_() == atom!("keydown") &&
+            let Some(event) = event.downcast::<KeyboardEvent>()
+        {
             self.owner_document()
                 .event_handler()
-                .run_default_keyboard_event_handler(cx, self, event);
+                .maybe_dispatch_simulated_click(cx, self, event);
         }
     }
 

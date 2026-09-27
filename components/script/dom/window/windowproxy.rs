@@ -49,14 +49,15 @@ use script_bindings::codegen::GenericBindings::WindowBinding::{
 };
 use script_bindings::conversions::jsid_to_string;
 use script_bindings::proxyhandler::{
-    self, CrossOriginProperties, cross_origin_get_own_property_helper,
-    cross_origin_own_property_keys, cross_origin_property_fallback, cross_origin_set,
-    is_extensible, is_platform_object_same_origin, maybe_cross_origin_get_prototype,
+    self, CROSS_ORIGIN_PROPERTY_HOLDER_WEAK_MAP_SLOT, CrossOriginProperties,
+    cross_origin_get_own_property_helper, cross_origin_own_property_keys,
+    cross_origin_property_fallback, cross_origin_set, is_extensible,
+    is_platform_object_same_origin, maybe_cross_origin_get_prototype,
     maybe_cross_origin_set_prototype_rawcx, prevent_extensions, report_cross_origin_denial,
     set_property_descriptor,
 };
 use script_bindings::reflector::{DomObject, MutDomObject, Reflector};
-use script_traits::NewPipelineInfo;
+use script_traits::{NewPipelineInfo, WebViewState};
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel;
 use servo_base::generic_channel::GenericSend;
@@ -386,17 +387,21 @@ impl WindowProxy {
         let response = response_receiver.recv().unwrap()?;
         let new_browsing_context_id = BrowsingContextId::from(response.new_webview_id);
         let new_pipeline_info = NewPipelineInfo {
+            webview_state: WebViewState {
+                id: response.new_webview_id,
+                // Use the current `WebView`'s theme initially, but the embedder may change
+                // this later.
+                theme: Cell::new(window.webview_theme()),
+                // WebViews start focused by default for now.
+                has_system_focus: Cell::new(true),
+            },
             parent_info: None,
             new_pipeline_id: response.new_pipeline_id,
             browsing_context_id: new_browsing_context_id,
-            webview_id: response.new_webview_id,
             opener: Some(self.browsing_context_id),
             load_data,
             viewport_details: window.viewport_details(),
             user_content_manager_id: response.user_content_manager_id,
-            // Use the current `WebView`'s theme initially, but the embedder may
-            // change this later.
-            embedder_theme: window.embedder_theme(),
             target_snapshot_params: TargetSnapshotParams {
                 sandboxing_flags: sandboxing_flag_set,
                 iframe_element_referrer_policy: ReferrerPolicy::EmptyString,
@@ -444,7 +449,7 @@ impl WindowProxy {
         self.delaying_load_events_mode.set(false);
     }
 
-    // https://html.spec.whatwg.org/multipage/#disowned-its-opener
+    /// <https://html.spec.whatwg.org/multipage/#disowned-its-opener>
     pub(crate) fn disown(&self) {
         self.disowned.set(true);
     }
@@ -460,7 +465,7 @@ impl WindowProxy {
         self.is_closing.get()
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-opener
+    /// <https://html.spec.whatwg.org/multipage/#dom-opener>
     pub(crate) fn opener(&self, cx: &mut CurrentRealm, mut retval: MutableHandleValue) {
         if self.disowned.get() {
             return retval.set(NullValue());
@@ -503,7 +508,7 @@ impl WindowProxy {
         opener_proxy.to_jsval(cx, retval);
     }
 
-    // https://html.spec.whatwg.org/multipage/#window-open-steps
+    /// <https://html.spec.whatwg.org/multipage/#window-open-steps>
     pub(crate) fn open(
         &self,
         cx: &mut JSContext,
@@ -963,6 +968,12 @@ impl WindowProxy {
 
             // The old window proxy no longer owns this browsing context.
             SetProxyReservedSlot(old_js_proxy.get(), 0, &PrivateValue(ptr::null_mut()));
+            // Also drop any cached cross-origin property holders.
+            SetProxyReservedSlot(
+                old_js_proxy.get(),
+                CROSS_ORIGIN_PROPERTY_HOLDER_WEAK_MAP_SLOT,
+                &UndefinedValue(),
+            );
 
             // Brain transplant the window proxy. Brain transplantation is
             // usually done to move a window proxy between compartments, but
@@ -1847,20 +1858,22 @@ impl WindowOrDissimilarOriginWindow {
         &self,
         index: u32,
     ) -> Option<DomRoot<WindowProxy>> {
-        let browsing_context_id = self.window_proxy().browsing_context_id();
-        let (result_sender, result_receiver) = generic_channel::channel().unwrap();
-        let _ = self.global_scope().script_to_constellation_chan().send(
-            ScriptToConstellationMessage::GetChildBrowsingContextId(
-                browsing_context_id,
-                index as usize,
-                result_sender,
-            ),
-        );
-        result_receiver
-            .recv()
-            .ok()
-            .flatten()
-            .and_then(|id| ScriptThread::window_proxies().find_window_proxy(id))
+        let window_proxy = self.window_proxy();
+        let browsing_context_id = if let Some(document) = window_proxy.document() {
+            document.iframes().at_insertion_index(index as usize)?
+        } else {
+            let parent_browsing_context_id = window_proxy.browsing_context_id();
+            let (result_sender, result_receiver) = generic_channel::channel().unwrap();
+            let _ = self.global_scope().script_to_constellation_chan().send(
+                ScriptToConstellationMessage::GetChildBrowsingContextId(
+                    parent_browsing_context_id,
+                    index as usize,
+                    result_sender,
+                ),
+            );
+            result_receiver.recv().ok().flatten()?
+        };
+        ScriptThread::window_proxies().find_window_proxy(browsing_context_id)
     }
 
     /// <https://html.spec.whatwg.org/multipage/#document-tree-child-navigable-target-name-property-set>

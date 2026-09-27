@@ -4,10 +4,10 @@
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
+use layout_api::LCPCandidate;
 use paint_api::display_list::PaintTimingInfo;
 use script_bindings::reflector::reflect_dom_object;
 use servo_base::cross_process_instant::CrossProcessInstant;
-use servo_url::ServoUrl;
 use time::Duration;
 
 use super::performanceentry::{EntryType, PerformanceEntry};
@@ -39,9 +39,9 @@ pub(crate) struct LargestContentfulPaint {
 
 impl LargestContentfulPaint {
     pub(crate) fn new_inherited(
-        size: usize,
-        url: Option<ServoUrl>,
+        candidate: &LCPCandidate,
         element: Option<&Element>,
+        load_time: Option<CrossProcessInstant>,
         paint_timing_info: PaintTimingInfo,
     ) -> LargestContentfulPaint {
         // From: <https://www.w3.org/TR/largest-contentful-paint/#sec-largest-contentful-paint-interface>
@@ -56,13 +56,15 @@ impl LargestContentfulPaint {
                 Some(render_time),
                 Duration::ZERO,
             ),
-            load_time: None,
+            load_time,
             render_time,
-            size,
-            url: url.map(|u| DOMString::from(u.as_str())).unwrap_or_default(),
-            element: Some(Dom::from_ref(
-                element.expect("Element for LCP entry should be non-null"),
-            )),
+            size: candidate.area,
+            url: candidate
+                .url
+                .as_ref()
+                .map(|url| DOMString::from(url.as_str()))
+                .unwrap_or_default(),
+            element: element.map(Dom::from_ref),
             paint_timing_info,
         }
     }
@@ -70,17 +72,17 @@ impl LargestContentfulPaint {
     pub(crate) fn new(
         cx: &mut JSContext,
         global: &GlobalScope,
-        size: usize,
-        url: Option<ServoUrl>,
+        candidate: &LCPCandidate,
         element: Option<&Element>,
+        load_time: Option<CrossProcessInstant>,
         paint_timing_info: PaintTimingInfo,
     ) -> DomRoot<LargestContentfulPaint> {
         reflect_dom_object(
             cx,
             Box::new(LargestContentfulPaint::new_inherited(
-                size,
-                url,
+                candidate,
                 element,
+                load_time,
                 paint_timing_info,
             )),
             global,

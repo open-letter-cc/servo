@@ -928,7 +928,14 @@ pub unsafe extern "C" fn servo_webview_focus(webview: *mut WebView) {
     // SAFETY: the caller is assumed to uphold the safety requirements for
     // `webview` documented above.
     let webview = unsafe { &*webview };
-    webview.focus();
+    // Upstream replaced `WebView::focus()`/`blur()` with `set_focused(bool)` when
+    // it reworked focus into per-webview *system* focus (servo#48364). The C ABI
+    // is unchanged, but the semantics underneath are not: the old
+    // `EmbedderToConstellationMessage::BlurWebView` carried no webview id and so
+    // was global - focusing one view implicitly blurred every other - whereas
+    // `SetWebViewHasSystemFocus` is per view. A host with more than one viewport
+    // must now blur the outgoing view explicitly; it no longer happens for free.
+    webview.set_focused(true);
 }
 
 /// Tells Servo that `webview` has lost keyboard focus.
@@ -953,7 +960,9 @@ pub unsafe extern "C" fn servo_webview_blur(webview: *mut WebView) {
     // SAFETY: the caller is assumed to uphold the safety requirements for
     // `webview` documented above.
     let webview = unsafe { &*webview };
-    webview.blur();
+    // See `servo_webview_focus` for why this is `set_focused(false)` and for the
+    // semantic change that came with it.
+    webview.set_focused(false);
 }
 
 /// Whether `webview` currently has the keyboard focus.

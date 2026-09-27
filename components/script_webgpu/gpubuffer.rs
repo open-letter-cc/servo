@@ -20,11 +20,12 @@ use script_bindings::codegen::GenericBindings::WebGPUBinding::{
 use script_bindings::error::{Error, Fallible};
 use script_bindings::interfaces::{PromiseHelpers, StackRootPromiseHelpers};
 use script_bindings::reflector::{DomGlobalGeneric, Reflector, reflect_dom_object_with_wrap};
+use script_bindings::routed_promise::RoutedPromiseListener;
 use script_bindings::trace::RootedTraceableBox;
 use servo_base::generic_channel::GenericSharedMemory;
 use webgpu_traits::{
-    BufferAddress, BufferDescriptor, BufferUsages, COPY_BUFFER_ALIGNMENT, HostMap, MAP_ALIGNMENT,
-    Mapping, WebGPU, WebGPUBuffer, WebGPURequest,
+    BufferAccessError, BufferAddress, BufferDescriptor, BufferUsages, COPY_BUFFER_ALIGNMENT,
+    HostMap, MAP_ALIGNMENT, Mapping, WebGPU, WebGPUBuffer, WebGPURequest,
 };
 
 use crate::datablock::DataBlock;
@@ -134,7 +135,7 @@ where
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         cx: &mut js::context::JSContext,
         global: &D::GlobalScope,
@@ -147,11 +148,11 @@ where
         label: USVString,
     ) -> DomRoot<Self> {
         reflect_dom_object_with_wrap::<D, _, _>(
+            cx,
             Box::new(GPUBuffer::new_inherited(
                 channel, buffer, device, size, usage, mapping, label,
             )),
             global,
-            cx,
             GPUBufferWrap::<D>,
         )
     }
@@ -285,7 +286,7 @@ where
         offset: GPUSize64,
         size: Option<GPUSize64>,
     ) -> <D::Promise as PromiseHelpers<D>>::StackRoot {
-        let promise = D::Promise::new_in_realm_rooted(cx);
+        let promise = D::Promise::new_in_realm(cx);
         // Step 2
         if self.pending_map.borrow().is_some() {
             promise.reject_error(
@@ -451,7 +452,6 @@ where
 impl<D> GPUBuffer<D>
 where
     D: Equivalence,
-    <D::Promise as PromiseHelpers<D>>::StackRoot: WebGPUPromise<D>,
 {
     pub fn map_failure(
         &self,
@@ -516,6 +516,20 @@ where
                 self.pending_map.safe_borrow_mut(cx).take();
                 p.resolve_native(cx, &());
             },
+        }
+    }
+}
+
+impl<D: Equivalence> RoutedPromiseListener<D, Result<Mapping, BufferAccessError>> for GPUBuffer<D> {
+    fn handle_response(
+        &self,
+        cx: &mut js::context::JSContext,
+        response: Result<Mapping, BufferAccessError>,
+        promise: &<D::Promise as PromiseHelpers<D>>::StackRoot,
+    ) {
+        match response {
+            Ok(mapping) => self.map_success(cx, promise, mapping),
+            Err(_) => self.map_failure(cx, promise),
         }
     }
 }

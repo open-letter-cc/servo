@@ -61,7 +61,6 @@ pub struct GPURenderPipeline<D: DomTypes> {
 impl<D> GPURenderPipeline<D>
 where
     D: Equivalence,
-    <D::Promise as PromiseHelpers<D>>::StackRoot: WebGPUPromise<D>,
 {
     fn new_inherited(
         render_pipeline: WebGPURenderPipeline,
@@ -87,13 +86,13 @@ where
         device: &D::GPUDevice,
     ) -> DomRoot<Self> {
         reflect_dom_object_with_wrap::<D, _, _>(
+            cx,
             Box::new(GPURenderPipeline::new_inherited(
                 render_pipeline,
                 label,
                 device,
             )),
             global,
-            cx,
             GPURenderPipelineWrap::<D>,
         )
     }

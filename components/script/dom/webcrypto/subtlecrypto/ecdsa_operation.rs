@@ -227,9 +227,9 @@ pub(crate) fn generate_key(
     usages: Vec<KeyUsage>,
 ) -> Result<CryptoKeyPair, Error> {
     ec_common::generate_key(
-        EcAlgorithm::Ecdsa,
         cx,
         global,
+        EcAlgorithm::Ecdsa,
         normalized_algorithm,
         extractable,
         usages,
@@ -247,9 +247,9 @@ pub(crate) fn import_key(
     usages: Vec<KeyUsage>,
 ) -> Result<DomRoot<CryptoKey>, Error> {
     ec_common::import_key(
-        EcAlgorithm::Ecdsa,
         cx,
         global,
+        EcAlgorithm::Ecdsa,
         normalized_algorithm,
         format,
         key_data,
@@ -272,5 +272,5 @@ pub(crate) fn get_public_key(
     algorithm: &KeyAlgorithmAndDerivatives,
     usages: Vec<KeyUsage>,
 ) -> Result<DomRoot<CryptoKey>, Error> {
-    ec_common::get_public_key(cx, global, key, algorithm, usages)
+    ec_common::get_public_key(cx, global, EcAlgorithm::Ecdsa, key, algorithm, usages)
 }

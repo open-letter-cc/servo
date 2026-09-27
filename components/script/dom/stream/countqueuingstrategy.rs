@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::rc::Rc;
-
 use dom_struct::dom_struct;
 use js::context::JSContext;
 use js::jsapi::CallArgs;
@@ -11,6 +9,7 @@ use js::jsval::{Int32Value, JSVal};
 use js::rust::HandleObject;
 use script_bindings::reflector::{Reflector, reflect_dom_object_with_proto};
 
+use crate::dom::bindings::callback::RootedCallback;
 use crate::dom::bindings::codegen::Bindings::FunctionBinding::Function;
 use crate::dom::bindings::codegen::Bindings::QueuingStrategyBinding::{
     CountQueuingStrategyMethods, QueuingStrategy, QueuingStrategyInit, QueuingStrategySize,
@@ -62,7 +61,7 @@ impl CountQueuingStrategyMethods<crate::DomTypeHolder> for CountQueuingStrategy 
     }
 
     /// <https://streams.spec.whatwg.org/#cqs-size>
-    fn GetSize(&self, cx: &mut JSContext) -> Fallible<Rc<Function>> {
+    fn GetSize(&self, cx: &mut JSContext) -> Fallible<RootedCallback<Function>> {
         let global = self.global();
         // Return this's relevant global object's count queuing strategy
         // size function.
@@ -75,7 +74,7 @@ impl CountQueuingStrategyMethods<crate::DomTypeHolder> for CountQueuingStrategy 
 
         // Step 2. Let F be !CreateBuiltinFunction(steps, 1, "size", « »,
         // globalObject’s relevant Realm).
-        let fun = native_fn!(cx, count_queuing_strategy_size, c"size", 0, 0);
+        let fun = RootedCallback::from(native_fn!(cx, count_queuing_strategy_size, c"size", 0, 0));
         // Step 3. Set globalObject’s count queuing strategy size function to
         // a Function that represents a reference to F,
         // with callback context equal to globalObject’s relevant settings object.
@@ -120,13 +119,13 @@ pub(crate) fn extract_high_water_mark(
 pub(crate) fn extract_size_algorithm(
     cx: &mut JSContext,
     strategy: &QueuingStrategy,
-) -> Rc<QueuingStrategySize> {
+) -> RootedCallback<QueuingStrategySize> {
     if strategy.size.is_none() {
         let fun_obj = native_raw_obj_fn!(cx, count_queuing_strategy_size, c"size", 0, 0);
         #[expect(unsafe_code)]
         unsafe {
-            return QueuingStrategySize::new(cx, fun_obj);
+            return RootedCallback::from(QueuingStrategySize::new(cx, fun_obj));
         };
     }
-    strategy.size.as_ref().unwrap().clone()
+    strategy.size.as_ref().unwrap().root()
 }

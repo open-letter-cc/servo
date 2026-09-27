@@ -225,9 +225,6 @@ class DescriptorProvider:
     def callbackUsesRc(self, callbackIdentifier: str) -> bool:
         return self.config.getCallbackConfig(callbackIdentifier).get('rc', False)
 
-    def callbackUsesRcPromise(self, callbackIdentifier: str) -> bool:
-        return self.config.getCallbackConfig(callbackIdentifier).get('useRcPromise', False)
-
 def MemberIsLegacyUnforgeable(member: IDLAttribute | IDLMethod, descriptor: Descriptor) -> bool:
     return ((member.isAttr() or member.isMethod())
             and not member.isStatic()
@@ -284,7 +281,8 @@ class Descriptor(DescriptorProvider):
         elif self.interface.isCallback():
             ty = 'crate::codegen::GenericBindings::%sBinding::%s' % (ifaceName, ifaceName)
             pathDefault = ty
-            self.returnType = "Rc<%s<D>>" % ty
+            callback_type = "Rc" if desc.get('useRcCallback', False) else "RootedCallback"
+            self.returnType = "%s<%s<D>>" % (callback_type, ty)
             self.argumentType = "???"
             self.nativeType = ty
         else:
@@ -324,7 +322,6 @@ class Descriptor(DescriptorProvider):
         self.weakReferenceable = desc.get('weakReferenceable', False)
         self.useSystemCompartment = desc.get('useSystemCompartment', False)
         self.allowDropImpl = desc.get('allowDropImpl', False)
-        self.useRcPromise = desc.get('useRcPromise', False)
         self.useRcCallback = self.interface.isCallback() and desc.get('useRcCallback', False)
 
         # If we're concrete, we need to crawl our ancestor interfaces and mark

@@ -4353,6 +4353,19 @@
       {}
      ]
     ],
+    "linear-gradients-small-stop-gaps.html": [
+     "38542d78b9077de41cee1a41676611ca1dc3df16",
+     [
+      "css/linear-gradients-small-stop-gaps.html",
+      [
+       [
+        "/_mozilla/css/linear-gradients-small-stop-gaps-ref.html",
+        "=="
+       ]
+      ],
+      {}
+     ]
+    ],
     "linear-gradients-smoke.html": [
      "4c6a5693903d9092a3fbca5d2d346ec35e88e53d",
      [
@@ -9834,6 +9847,10 @@
      "eb34e7eb3496651f18b8f710bfed0d65a480a667",
      []
     ],
+    "linear-gradients-small-stop-gaps-ref.html": [
+     "1e90a41357ca328b02cc726ef350ea9593e8f506",
+     []
+    ],
     "linear-gradients-smoke-ref.html": [
      "0c2a5644e19e3922665a04435203e7682b950562",
      []
@@ -11130,6 +11147,14 @@
      "3f096b6f5a6611f97f625d8a0420aaa96f2e2b01",
      []
     ],
+    "paint-timing": {
+     "resources": {
+      "paint-timing-iframe.html": [
+       "79cdb6e758437f6d26d596fad87905a0c738df18",
+       []
+      ]
+     }
+    },
     "partial-shadow-dom-layout-style-ref.html": [
      "bf40d2cc35b6b2c1e32afffa0651cb1b26e41fe8",
      []
@@ -13488,6 +13513,24 @@
       }
      ]
     ],
+    "keyboard-select-all-no-body.html": [
+     "bfdadd7294b68e0ac786c2c9b4d2eb8556ab2c37",
+     [
+      null,
+      {
+       "testdriver": true
+      }
+     ]
+    ],
+    "keyboard-select-all.html": [
+     "3f45a8ea49c2b408a8d427d9851c26b62732b500",
+     [
+      null,
+      {
+       "testdriver": true
+      }
+     ]
+    ],
     "mouse-button-events-detail-increases-indefinitely.html": [
      "6bf57fe3accad4d3cbfb454e10f31b0a8540b5a5",
      [
@@ -13933,15 +13976,6 @@
      ]
     ],
     "cross-origin-objects": {
-     "cross-origin-objects.html": [
-      "2ad24df66cfa8d2571c1ab25a2dd2dfcb2c1ae4e",
-      [
-       null,
-       {
-        "timeout": "long"
-       }
-      ]
-     ],
      "cross-origin-postMessage.html": [
       "143240c97aa60b52c8d2e0067c25e4509bf6481d",
       [
@@ -14633,7 +14667,7 @@
      ]
     ],
     "interfaces.https.html": [
-     "dd18635aaf0f051555a9527de1bf4179e3e2dd52",
+     "99e8dc9060c5b9f3bd73783ef141df5c5ceeb09d",
      [
       null,
       {}
@@ -14922,6 +14956,17 @@
       {}
      ]
     ],
+    "paint-timing": {
+     "nested-context-eligibility.sub.html": [
+      "9832a63e1eae41b11e62cd862b581dd9e4c57e68",
+      [
+       null,
+       {
+        "timeout": "long"
+       }
+      ]
+     ]
+    },
     "paint-timing.html": [
      "0c1798ec565a77d20d9550b5cec352a0b286c415",
      [
@@ -15524,6 +15569,22 @@
     ],
     "xpathmark-ft.html": [
      "d2c65f8ff6529b8c8dba26c07484793096c0617a",
+     [
+      null,
+      {}
+     ]
+    ]
+   },
+   "selection": {
+    "toString-display-none.html": [
+     "1324602119ccf4ef4aabb258454e4f85eca19b61",
+     [
+      null,
+      {}
+     ]
+    ],
+    "toString-slots.html": [
+     "093d50b6f15a0ad48cc3c2814982ede01aa01da8",
      [
       null,
       {}

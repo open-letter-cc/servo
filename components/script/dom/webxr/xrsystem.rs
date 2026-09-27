@@ -27,7 +27,6 @@ use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::refcounted::{Trusted, TrustedPromise};
 use crate::dom::bindings::reflector::DomGlobal;
 use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
-use crate::dom::bindings::trace::RootedTraceableBox;
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::gamepad::Gamepad;
 use crate::dom::promise::{Promise, RootedPromise};
@@ -115,7 +114,7 @@ impl XRSystemMethods<crate::DomTypeHolder> for XRSystem {
     /// <https://immersive-web.github.io/webxr/#dom-xr-issessionsupported>
     fn IsSessionSupported(&self, cx: &mut CurrentRealm, mode: XRSessionMode) -> RootedPromise {
         // XXXManishearth this should select an XR device first
-        let promise = Promise::new_in_realm_rooted(cx);
+        let promise = Promise::new_in_realm(cx);
         let mut trusted = Some(TrustedPromise::from(&promise));
         let global = self.global();
         let task_source = global
@@ -157,11 +156,11 @@ impl XRSystemMethods<crate::DomTypeHolder> for XRSystem {
         &self,
         realm: &mut CurrentRealm,
         mode: XRSessionMode,
-        init: RootedTraceableBox<XRSessionInit>,
+        init: &XRSessionInit,
     ) -> RootedPromise {
         let global = self.global();
         let window = global.as_window();
-        let promise = Promise::new_in_realm_rooted(realm);
+        let promise = Promise::new_in_realm(realm);
 
         if mode != XRSessionMode::Inline {
             if !ScriptThread::is_user_interacting() {

@@ -4,14 +4,13 @@
 
 use std::cell::Cell;
 use std::ptr::{self};
-use std::rc::Rc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
-use js::jsapi::{Heap, IsPromiseObject, JSObject};
+use js::jsapi::{Heap, JSObject};
 use js::jsval::{JSVal, ObjectValue, UndefinedValue};
 use js::realm::CurrentRealm;
-use js::rust::{HandleObject as SafeHandleObject, HandleValue as SafeHandleValue, IntoHandle};
+use js::rust::{HandleObject as SafeHandleObject, HandleValue as SafeHandleValue};
 use rustc_hash::FxHashMap;
 use script_bindings::callback::ExceptionHandling;
 use script_bindings::cell::DomRefCell;
@@ -21,6 +20,7 @@ use servo_constellation_traits::TransformStreamData;
 
 use super::readablestream::CrossRealmTransformReadable;
 use super::writablestream::CrossRealmTransformWritable;
+use crate::dom::bindings::callback::RootedCallback;
 use crate::dom::bindings::codegen::Bindings::QueuingStrategyBinding::{
     QueuingStrategy, QueuingStrategySize,
 };
@@ -455,7 +455,7 @@ impl TransformStream {
         // NOTE: These steps are implemented in `TransformStreamDefaultController::new`
 
         // Step 8. Let startPromise be a promise resolved with undefined.
-        let start_promise = Promise::new_resolved_rooted(cx, global, ());
+        let start_promise = Promise::new_resolved(cx, global, ());
 
         // Step 9. Perform ! InitializeTransformStream(stream, startPromise,
         // writableHighWaterMark, writableSizeAlgorithm, readableHighWaterMark,
@@ -505,9 +505,9 @@ impl TransformStream {
         global: &GlobalScope,
         start_promise: &RootedPromise,
         writable_high_water_mark: f64,
-        writable_size_algorithm: Rc<QueuingStrategySize>,
+        writable_size_algorithm: RootedCallback<QueuingStrategySize>,
         readable_high_water_mark: f64,
-        readable_size_algorithm: Rc<QueuingStrategySize>,
+        readable_size_algorithm: RootedCallback<QueuingStrategySize>,
     ) -> Fallible<()> {
         // Let startAlgorithm be an algorithm that returns startPromise.
         // Let writeAlgorithm be the following steps, taking a chunk argument:
@@ -579,8 +579,7 @@ impl TransformStream {
         }
 
         // Set stream.[[backpressureChangePromise]] to a new promise.;
-        *self.backpressure_change_promise.borrow_mut() =
-            Some(Promise::new_rooted(cx, global).to_traced());
+        *self.backpressure_change_promise.borrow_mut() = Some(Promise::new(cx, global).to_traced());
 
         // Set stream.[[backpressure]] to backpressure.
         self.backpressure.set(backpressure);
@@ -675,7 +674,7 @@ impl TransformStream {
             assert!(backpressure_change_promise.is_some());
 
             // Return the result of reacting to backpressureChangePromise with the following fulfillment steps:
-            let result_promise = Promise::new_rooted(cx, global);
+            let result_promise = Promise::new(cx, global);
             rooted!(&in(cx) let mut fulfillment_handler = Some(TransformBackPressureChangePromiseFulfillment {
                 controller: Dom::from_ref(&controller),
                 writable: Dom::from_ref(&self.writable.get().expect("writable stream")),
@@ -724,7 +723,7 @@ impl TransformStream {
         let readable = self.readable.get().expect("readable stream is not set");
 
         // Let controller.[[finishPromise]] be a new promise.
-        controller.set_finish_promise(&Promise::new_rooted(cx, global));
+        controller.set_finish_promise(&Promise::new(cx, global));
 
         // Let cancelPromise be the result of performing controller.[[cancelAlgorithm]], passing reason.
         let cancel_promise = controller.perform_cancel(cx, global, reason)?;
@@ -781,7 +780,7 @@ impl TransformStream {
             .ok_or(Error::Type(c"readable stream is not set".to_owned()))?;
 
         // Let controller.[[finishPromise]] be a new promise.
-        controller.set_finish_promise(&Promise::new_rooted(cx, global));
+        controller.set_finish_promise(&Promise::new(cx, global));
 
         // Let flushPromise be the result of performing controller.[[flushAlgorithm]].
         let flush_promise = controller.perform_flush(cx, global)?;
@@ -841,7 +840,7 @@ impl TransformStream {
             .ok_or(Error::Type(c"writable stream is not set".to_owned()))?;
 
         // Let controller.[[finishPromise]] be a new promise.
-        controller.set_finish_promise(&Promise::new_rooted(cx, global));
+        controller.set_finish_promise(&Promise::new(cx, global));
 
         // Let cancelPromise be the result of performing controller.[[cancelAlgorithm]], passing reason.
         let cancel_promise = controller.perform_cancel(cx, global, reason)?;
@@ -942,7 +941,6 @@ impl TransformStream {
 
 impl TransformStreamMethods<crate::DomTypeHolder> for TransformStream {
     /// <https://streams.spec.whatwg.org/#ts-constructor>
-    #[expect(unsafe_code)]
     fn Constructor(
         cx: &mut JSContext,
         global: &GlobalScope,
@@ -994,7 +992,7 @@ impl TransformStreamMethods<crate::DomTypeHolder> for TransformStream {
         let writable_size_algorithm = extract_size_algorithm(cx, writable_strategy);
 
         // Let startPromise be a new promise.
-        let start_promise = Promise::new_rooted(cx, global);
+        let start_promise = Promise::new(cx, global);
 
         // Perform ! InitializeTransformStream(this, startPromise, writableHighWaterMark,
         // writableSizeAlgorithm, readableHighWaterMark, readableSizeAlgorithm).
@@ -1021,7 +1019,6 @@ impl TransformStreamMethods<crate::DomTypeHolder> for TransformStream {
         // result of invoking transformerDict["start"]
         // with argument list « this.[[controller]] » and callback this value transformer.
         if let Some(start) = &transformer_dict.start {
-            rooted!(&in(cx) let mut result_object = ptr::null_mut::<JSObject>());
             rooted!(&in(cx) let mut result: JSVal);
             rooted!(&in(cx) let this_object = transformer_obj.get());
             start.Call_(
@@ -1031,19 +1028,7 @@ impl TransformStreamMethods<crate::DomTypeHolder> for TransformStream {
                 result.handle_mut(),
                 ExceptionHandling::Rethrow,
             )?;
-            let is_promise = unsafe {
-                if result.is_object() {
-                    result_object.set(result.to_object());
-                    IsPromiseObject(result_object.handle().into_handle())
-                } else {
-                    false
-                }
-            };
-            let promise = if is_promise {
-                Promise::new_with_js_promise(cx, result_object.handle())
-            } else {
-                Promise::new_resolved(cx, global, result.get())
-            };
+            let promise = Promise::resolve_or_wrap_promise(cx, result.handle(), global);
             start_promise.resolve_native(cx, &promise);
         } else {
             // Otherwise, resolve startPromise with undefined.
