@@ -155,17 +155,93 @@ jobs:
           $rel = "$env:CARGO_TARGET_DIR\release"
           $readobj = "$env:LIBCLANG_PATH\llvm-readobj.exe"
 
+          # -CaseSensitive matters: Stylo links five `Servo_NumericType_*`
+          # exports into this same DLL, and Select-String matches
+          # case-insensitively by default. Without the flag the reported count is
+          # five higher than the capi surface, which both misreports the total and
+          # slackens the floor below by five.
           $exports = & $readobj --coff-exports "$rel\servo.dll" |
-            Select-String -Pattern '^\s*Name:\s*(servo_\w+)\s*$' |
+            Select-String -CaseSensitive -Pattern '^\s*Name:\s*(servo_\w+)\s*$' |
             ForEach-Object { $_.Matches[0].Groups[1].Value } |
             Sort-Object -Unique
 
           Write-Host "servo.dll exports $($exports.Count) servo_* symbols"
 
-          # The twelve that `ffi/capi` does not define and that
-          # vendor/zdr-capi-shim adds. Named one by one rather than counted, so
-          # that a rename shows up as the missing name.
-          $embedding = @(
+          # A count cannot say WHICH export went missing, so a payload that clears
+          # the floor while lacking a name fails on the embedder's side at runtime
+          # rather than here - the wrong end to find out. Hence names, one by one.
+          #
+          # The embedder resolves in two classes, and they are not interchangeable:
+          #
+          #   required - absence fails the embedder's library load outright. No
+          #              viewport, nothing runs. Naming these is pure correctness:
+          #              absence is unconditionally fatal and there is no policy in
+          #              the decision.
+          #   optional - resolved if present, skipped if absent, so an OLDER payload
+          #              still loads. Naming one is a PROMISE, not a check: from then
+          #              on this fork has committed to shipping it forever, and the
+          #              backward tolerance the optional class exists to provide is
+          #              given up. Add here deliberately, never by reflex.
+
+          # All thirty. Absence of any one of these fails the embedder's library
+          # load outright, so every one is checked by name. Enumerated from the
+          # embedder's binding rather than reconstructed here, and every name
+          # verified present in a built DLL's PE export table before landing - a
+          # name correct in the binding but absent from the payload would turn this
+          # correctness fix into a red build and invite the wrong diagnosis.
+          #
+          # Two entries that look odd and are not:
+          #
+          #   servo_rendering_context_create_software is required while
+          #   create_native is optional. It is the fallback surface and the one
+          #   entry point that cannot itself depend on ANGLE having loaded. It is
+          #   also the older of the two - create_native arrives with the shim -
+          #   so an older payload has software and not native, which is exactly
+          #   the direction the optional class exists to tolerate.
+          #
+          #   servo_webview_take_screenshot is load-bearing beyond its name: it is
+          #   how the embedder distinguishes "the engine is not drawing" from "the
+          #   engine draws and nothing is presented". Losing it costs the only
+          #   instrument that separates those two failures.
+          $required = @(
+            'servo_builder_build',
+            'servo_builder_create',
+            'servo_builder_free',
+            'servo_builder_set_event_loop_waker',
+            'servo_builder_set_options',
+            'servo_builder_set_preferences',
+            'servo_free',
+            'servo_options_create',
+            'servo_options_free',
+            'servo_options_set_config_dir',
+            'servo_options_set_debug_option',
+            'servo_options_set_hard_fail',
+            'servo_options_set_multiprocess',
+            'servo_options_set_sandbox',
+            'servo_preferences_create',
+            'servo_preferences_free',
+            'servo_preferences_set_bool',
+            'servo_rendering_context_create_software',
+            'servo_rendering_context_free',
+            'servo_setup_logging',
+            'servo_spin_event_loop',
+            'servo_webview_builder_build',
+            'servo_webview_builder_create',
+            'servo_webview_builder_free',
+            'servo_webview_builder_set_delegate',
+            'servo_webview_builder_set_url',
+            'servo_webview_free',
+            'servo_webview_load',
+            'servo_webview_paint',
+            'servo_webview_take_screenshot'
+          )
+
+          # Promises, per the note above: the twelve `ffi/capi` does not define and
+          # that vendor/zdr-capi-shim adds, plus the ABI version query, which is how
+          # an embedder detects a stale payload before reading a struct whose shape
+          # it has guessed wrong. These were inherited rather than chosen; they are
+          # very likely right, but the commitment is now explicit.
+          $optional = @(
             'servo_rendering_context_create_native',
             'servo_rendering_context_set_window',
             'servo_rendering_context_take_window',
@@ -177,16 +253,57 @@ jobs:
             'servo_webview_blur',
             'servo_webview_focused',
             'servo_webview_builder_set_hidpi_scale_factor',
-            'servo_webview_set_hidpi_scale_factor'
+            'servo_webview_set_hidpi_scale_factor',
+            'servo_capi_abi_version'
           )
-          $missing = $embedding | Where-Object { $exports -notcontains $_ }
-          if ($missing) {
-            Write-Host "::error::servo.dll is missing $($missing.Count) embedding entry points: $($missing -join ', ')"
+
+          $gated = $required + $optional
+          $missingRequired = $required | Where-Object { $exports -notcontains $_ }
+          $missingOptional = $optional | Where-Object { $exports -notcontains $_ }
+
+          if ($missingRequired) {
+            Write-Host "::error::servo.dll is missing $($missingRequired.Count) REQUIRED symbol(s); the embedder's library load fails outright: $($missingRequired -join ', ')"
+          }
+          if ($missingOptional) {
+            Write-Host "::error::servo.dll is missing $($missingOptional.Count) promised optional symbol(s): $($missingOptional -join ', ')"
+          }
+          if ($missingRequired -or $missingOptional) { exit 1 }
+
+          # Sequencing tripwire.
+          #
+          # A symbol cannot be gated before it exists - naming one that does not
+          # would fail this job on every run until it lands, including the branch
+          # that adds it. So a planned-but-unimplemented entry point cannot be
+          # named in advance, which leaves a hole: the branch that implements one
+          # ships it without ever adding it above, this gate stays green, and a
+          # payload that still cannot display anything passes.
+          #
+          # This closes the hole from the other side. If a planned symbol appears
+          # in the DLL and has not been classified above, fail and say so. The
+          # check is inert until the symbol ships, and the commit that ships it is
+          # then the commit that has to classify it.
+          $planned = @(
+            'servo_rendering_context_present',
+            'servo_rendering_context_resize'
+          )
+          $ungated = $planned | Where-Object {
+            ($exports -contains $_) -and ($gated -notcontains $_)
+          }
+          if ($ungated) {
+            $names = $ungated -join ', '
+            Write-Host "::error::servo.dll exports $($ungated.Count) planned symbol(s) this gate does not check: $names. Add each to the required or optional list in the same commit that implements it - a payload can otherwise pass this job and still display nothing."
             exit 1
           }
 
-          # 42 is what a single-window embedder binds: the thirty ffi/capi
-          # already shipped plus the twelve above.
+          # 42 is what a single-window embedder binds: thirty required plus twelve
+          # of the optional set. It is a floor, not the current surface - additive
+          # growth must not fail this job - and raising it is a policy call about
+          # deliberate removals rather than a correctness fix, so it stays put.
+          #
+          # With all thirty required symbols and thirteen optional ones now checked
+          # by name above, this is a backstop rather than the primary check: it
+          # catches wholesale collapse in the twenty-two exports nobody binds,
+          # which names cannot cover because no list declares them.
           if ($exports.Count -lt 42) {
             Write-Host "::error::servo.dll exports only $($exports.Count) servo_* symbols, expected at least 42"
             exit 1
