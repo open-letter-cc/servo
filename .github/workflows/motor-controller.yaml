@@ -254,7 +254,16 @@ jobs:
             'servo_webview_focused',
             'servo_webview_builder_set_hidpi_scale_factor',
             'servo_webview_set_hidpi_scale_factor',
-            'servo_capi_abi_version'
+            'servo_capi_abi_version',
+            # The second half of drawing. servo_webview_paint renders into the
+            # context's surface; without present that surface is never shown, so
+            # the window never updates while the engine correctly reports frames.
+            # Classified here in the commit that implements it, which is what
+            # silences the $planned check below.
+            'servo_rendering_context_present',
+            # Sizes the surface. servo_webview_resize sizes the page; they are
+            # different sizes and the surface must be sized first.
+            'servo_rendering_context_resize'
           )
 
           $gated = $required + $optional
@@ -282,6 +291,18 @@ jobs:
           # in the DLL and has not been classified above, fail and say so. The
           # check is inert until the symbol ships, and the commit that ships it is
           # then the commit that has to classify it.
+          # Both entries below are now implemented and classified as optional
+          # above, so this check is satisfied by them rather than inert. Keep them
+          # listed: the check costs nothing and it is the record of which symbols
+          # were promised before they existed. Add future planned entry points
+          # here so the same protection covers them.
+          #
+          # servo_rendering_context_make_current is deliberately NOT listed. It is
+          # exported and required by the paint/present sequence - neither paint nor
+          # present binds the context, so an embedder that skips it presents an
+          # unbound surface - but the embedder's binding does not declare it yet.
+          # Gating it would promise a symbol nobody resolves. Add it to $optional
+          # when the binding picks it up.
           $planned = @(
             'servo_rendering_context_present',
             'servo_rendering_context_resize'

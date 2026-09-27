@@ -408,6 +408,129 @@ pub unsafe extern "C" fn servo_rendering_context_clone(
     Box::into_raw(Box::new(RenderingContext { inner }))
 }
 
+/// Makes this context current on the calling thread.
+///
+/// `context` is a handle to a `RenderingContext` object. The ownership of
+/// `context` remains with the caller after the call. Returns `true` on success.
+///
+/// **Call this before `servo_webview_paint` and
+/// `servo_rendering_context_present`, every frame.** Neither of those binds the
+/// context itself: `present` is implemented over surfman's
+/// `present_bound_surface`, which operates on whatever surface is *already*
+/// bound and does not make anything current. Servo's own shell does exactly this
+/// in `ServoShellWindow::repaint_webviews` - `make_current()`, then `paint()`,
+/// then `present()` - and it re-binds on every repaint rather than relying on the
+/// context staying current from creation, because painting can leave a different
+/// context bound.
+///
+/// An embedder that paints and presents without binding first will present an
+/// unbound or foreign surface, which shows as a window that never updates while
+/// the engine reports frames and screenshots of the page come back correct.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `context` was previously returned by one of the
+///   `servo_rendering_context_create_*` functions, or by
+///   `servo_rendering_context_clone`, and has not yet been freed.
+/// - The call is made from the same thread that will paint and present.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_rendering_context_make_current(
+    context: *mut RenderingContext,
+) -> bool {
+    assert!(!context.is_null(), "context pointer must not be null");
+
+    // SAFETY: the caller is assumed to uphold the safety requirements for
+    // `context` documented above.
+    match unsafe { (*context).inner.make_current() } {
+        Ok(()) => true,
+        Err(error) => {
+            log::error!("servo_rendering_context_make_current failed: {error:?}");
+            false
+        },
+    }
+}
+
+/// Presents this context's rendered frame, swapping buffers in a
+/// double-buffered context.
+///
+/// `context` is a handle to a `RenderingContext` object. The ownership of
+/// `context` remains with the caller after the call.
+///
+/// **This is the second half of drawing.** `servo_webview_paint` renders into
+/// this context's surface; without this call that surface is never shown, so the
+/// window keeps whatever it had while the engine correctly reports new frames.
+///
+/// The rendering context is the window-level object and webviews are sub-objects
+/// of it, so the relationship is one context to N webviews: paint every webview
+/// on a context, then present that context **once**. Presenting per webview would
+/// present N times a frame.
+///
+/// Requires this context to be current; see
+/// `servo_rendering_context_make_current`.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `context` was previously returned by one of the
+///   `servo_rendering_context_create_*` functions, or by
+///   `servo_rendering_context_clone`, and has not yet been freed.
+/// - The call is made from the same thread that created `context`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_rendering_context_present(context: *mut RenderingContext) {
+    assert!(!context.is_null(), "context pointer must not be null");
+
+    // SAFETY: the caller is assumed to uphold the safety requirements for
+    // `context` documented above.
+    unsafe { (*context).inner.present() };
+}
+
+/// Resizes this context's rendering surface.
+///
+/// `width` and `height` are the new size in physical pixels. `context` is a
+/// handle to a `RenderingContext` object; ownership remains with the caller.
+///
+/// This resizes the **surface**. `servo_webview_resize` resizes the **page**.
+/// They are different sizes and both are needed - in Servo's own shell the
+/// context takes the whole window's inner size while the webview takes only its
+/// viewport inside the shell's chrome - and the surface must be sized before
+/// anything draws into it. Servo's shell states the ordering in-source: *"Handle
+/// resize events first, so that any subsequent redrawing draws onto a buffer of
+/// the correct size."*
+///
+/// So: **this call, then `servo_webview_resize`, then paint.**
+///
+/// This is not `servo_rendering_context_set_window`. That rebinds a context to a
+/// different window, which is a different operation; calling it on the same
+/// window to change size is not supported and can fault inside surfman.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `context` was previously returned by one of the
+///   `servo_rendering_context_create_*` functions, or by
+///   `servo_rendering_context_clone`, and has not yet been freed.
+/// - The call is made from the same thread that created `context`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_rendering_context_resize(
+    context: *mut RenderingContext,
+    width: u32,
+    height: u32,
+) {
+    assert!(!context.is_null(), "context pointer must not be null");
+
+    // SAFETY: the caller is assumed to uphold the safety requirements for
+    // `context` documented above.
+    unsafe {
+        (*context)
+            .inner
+            .resize(dpi::PhysicalSize::new(width, height))
+    };
+}
+
 // -------------------------------------------------------------------------
 // Input
 // -------------------------------------------------------------------------
