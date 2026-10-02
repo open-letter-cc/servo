@@ -87,20 +87,24 @@ pub unsafe extern "C" fn servo_setup_logging(servo: *mut Servo) {
     servo.setup_logging();
 }
 
-/// Error codes returned by [`servo_content_process_main`].
+// The result codes of `servo_content_process_main`. All four are part of the ABI in
+// both feature arms and are declared unconditionally, but each arm only returns some
+// of them, so each is allowed to be unused rather than being gated on the feature:
+// an embedder compiles against the whole set whichever arm the payload was built
+// with.
 /// The content process ran to completion.
+#[allow(dead_code)]
 pub const SERVO_CONTENT_PROCESS_OK: i32 = 0;
 /// `token` was null, or was not valid UTF-8.
+#[allow(dead_code)]
 pub const SERVO_CONTENT_PROCESS_INVALID_TOKEN: i32 = -1;
 /// The content process failed to start or terminated abnormally.
+#[allow(dead_code)]
 pub const SERVO_CONTENT_PROCESS_FAILED: i32 = -2;
 /// This build has no multiprocess support compiled in, so it cannot serve a
 /// content process. The symbol still resolves so that an embedder can detect this
 /// by calling it rather than by failing to find it; see
 /// [`servo_content_process_main`].
-///
-// Part of the ABI in both feature arms, so it is declared unconditionally even
-// though only the `not(multiprocess)` arm returns it.
 #[allow(dead_code)]
 pub const SERVO_CONTENT_PROCESS_UNSUPPORTED: i32 = -3;
 
