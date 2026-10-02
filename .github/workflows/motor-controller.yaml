@@ -263,7 +263,20 @@ jobs:
             'servo_rendering_context_present',
             # Sizes the surface. servo_webview_resize sizes the page; they are
             # different sizes and the surface must be sized first.
-            'servo_rendering_context_resize'
+            'servo_rendering_context_resize',
+            # Lets a library embedder service the content-process re-exec.
+            # servo_options_set_multiprocess is settable without it, but the
+            # child is the HOST's binary, which has never heard of
+            # --content-process, so it exits and nothing renders. Classified
+            # here in the commit that implements it, which is what silences
+            # the $planned check below.
+            'servo_content_process_main',
+            # Installs the embedder's own script into every document a webview
+            # loads. The builder call is what creates the user-content manager,
+            # so the webview call only works on a webview built with at least one
+            # script; both are classified here in the commit that implements them.
+            'servo_webview_builder_add_script',
+            'servo_webview_add_script'
           )
 
           $gated = $required + $optional

@@ -8,8 +8,8 @@ use std::panic::{self, AssertUnwindSafe};
 
 pub use servo_api::LoadStatus;
 use servo_api::{
-    ContextMenuAction, EmbedderControl, EmbedderControlTag, SelectElementOptionOrOptgroup, WebView,
-    WebViewDelegate,
+    AllowOrDenyRequest, ContextMenuAction, Cursor, DeviceIntPoint, DeviceIntSize, EmbedderControl,
+    EmbedderControlTag, NavigationRequest, SelectElementOptionOrOptgroup, WebView, WebViewDelegate,
 };
 
 /// The delegate that receives notifications about `WebView` events.
@@ -97,8 +97,7 @@ pub struct ServoWebViewDelegate {
 
     /// Called when the `WebView` has closed. No further callbacks will be
     /// delivered for it after this one returns.
-    pub notify_closed:
-        Option<unsafe extern "C" fn(webview: *mut WebView, user_data: *mut c_void)>,
+    pub notify_closed: Option<unsafe extern "C" fn(webview: *mut WebView, user_data: *mut c_void)>,
 
     /// Called when content running in this `WebView` logs a console message.
     ///
@@ -131,6 +130,123 @@ pub struct ServoWebViewDelegate {
             user_data: *mut c_void,
         ),
     >,
+
+    /// Called before a navigation proceeds, so that the embedder can allow or
+    /// refuse it. Return `true` to allow the navigation, `false` to refuse it.
+    ///
+    /// This fires for every navigation of this `WebView` or one of its inner
+    /// frames, whichever side started it: a link click, a redirect, script
+    /// setting `location`, or `servo_webview_load`. It is the counterpart to
+    /// `notify_url_changed`, which reports a navigation that has already
+    /// happened and so cannot refuse one.
+    ///
+    /// `url_ptr`/`url_len` are the target URL's serialization, borrowed for the
+    /// duration of this call only and not NUL-terminated. The embedder must
+    /// copy the bytes if it needs to retain them past the call.
+    ///
+    /// Servo attaches no meaning to the answer and forms no view of its own
+    /// about which navigations are reasonable; this reports the navigation and
+    /// carries the answer back, nothing more.
+    ///
+    /// # Defaults, which are not the same in both directions
+    ///
+    /// A `NULL` callback keeps Servo's default path, which **allows** the
+    /// navigation. That matches Servo's own behaviour for an unhandled request.
+    ///
+    /// A callback that is present but **unwinds is treated as a refusal**, not
+    /// as a default. A hook whose purpose is to vet navigations must not turn
+    /// into a silent bypass because the embedder panicked, so the failure
+    /// direction here is deliberately the opposite of the `NULL` case.
+    pub request_navigation: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            url_ptr: *const u8,
+            url_len: usize,
+            user_data: *mut c_void,
+        ) -> bool,
+    >,
+
+    /// Called when this `WebView` has entered or left fullscreen state.
+    ///
+    /// This is a notification and cannot be refused: the page enters or leaves
+    /// fullscreen internally according to the Fullscreen API regardless of what
+    /// the embedder does with it. It exists so that an embedder managing its own
+    /// window chrome can transition the containing window to match.
+    pub notify_fullscreen_state_changed: Option<
+        unsafe extern "C" fn(webview: *mut WebView, is_fullscreen: bool, user_data: *mut c_void),
+    >,
+
+    /// Called when the cursor this `WebView` wants to display has changed.
+    ///
+    /// `cursor` is one of the `SERVO_CURSOR_*` constants.
+    ///
+    /// # Unknown values
+    ///
+    /// The set of values can grow, so an embedder may receive a value it does not
+    /// know. **`SERVO_CURSOR_DEFAULT` is the designated fallback**: an embedder
+    /// must map any unrecognised value to it, and must not transmute or cast the
+    /// integer into a cursor type of its own. Servo never sends a value outside
+    /// the `SERVO_CURSOR_*` set, but the fallback is what makes a newer payload
+    /// safe against an older embedder rather than undefined.
+    pub notify_cursor_changed:
+        Option<unsafe extern "C" fn(webview: *mut WebView, cursor: u32, user_data: *mut c_void)>,
+
+    /// Called when the page title of this `WebView` has changed.
+    ///
+    /// `title_ptr`/`title_len` are the title text, borrowed for the duration of
+    /// this call only and not NUL-terminated. The embedder must copy the bytes
+    /// if it needs to retain them past the call.
+    ///
+    /// A page with no title is reported as `NULL`/`0`, which is distinct from a
+    /// title that is the empty string: that arrives as a non-`NULL` pointer with
+    /// a length of zero.
+    pub notify_page_title_changed: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            title_ptr: *const u8,
+            title_len: usize,
+            user_data: *mut c_void,
+        ),
+    >,
+
+    /// Called when page content asks for the window containing this `WebView` to
+    /// move, for example through `window.moveTo`.
+    ///
+    /// This is a request reported as a notification: there is nothing to answer,
+    /// and whether to honour it is entirely the embedder's decision. Servo does
+    /// not move anything itself and forms no view about whether the position is
+    /// reasonable.
+    pub request_move_to:
+        Option<unsafe extern "C" fn(webview: *mut WebView, x: i32, y: i32, user_data: *mut c_void)>,
+
+    /// Called when page content asks for the window containing this `WebView` to
+    /// be resized to the given outer size, for example through `window.resizeTo`.
+    ///
+    /// Servo guarantees both values are greater than zero but applies no upper
+    /// bound; limiting the maximum size is the embedder's job. As with
+    /// `request_move_to` there is nothing to answer and Servo resizes nothing
+    /// itself.
+    pub request_resize_to: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            width: i32,
+            height: i32,
+            user_data: *mut c_void,
+        ),
+    >,
+
+    /// Called before a `Document` in this `WebView`'s main frame or one of its
+    /// nested frames is unloaded, so that the embedder can allow or refuse it.
+    /// Return `true` to allow the unload, `false` to refuse it.
+    ///
+    /// This is the counterpart to `request_navigation`: that one covers arriving
+    /// at a document, this one covers leaving it. The same asymmetric defaults
+    /// apply for the same reasons — a `NULL` callback **allows** the unload,
+    /// matching Servo's own default, while a callback that **unwinds is treated
+    /// as a refusal** so that a panicking embedder cannot become a silent
+    /// bypass. See `request_navigation` for the full rationale.
+    pub request_unload:
+        Option<unsafe extern "C" fn(webview: *mut WebView, user_data: *mut c_void) -> bool>,
 }
 
 // Adding a field here changes this number. Update it deliberately, state the
@@ -139,8 +255,8 @@ pub struct ServoWebViewDelegate {
 // built against an older header fails by reading a struct that is too short
 // rather than by misreading an existing field.
 const _: () = assert!(
-    size_of::<ServoWebViewDelegate>() == 64,
-    "ServoWebViewDelegate must stay 64 bytes wide"
+    size_of::<ServoWebViewDelegate>() == 120,
+    "ServoWebViewDelegate must stay 120 bytes wide"
 );
 
 impl WebViewDelegate for ServoWebViewDelegate {
@@ -260,6 +376,164 @@ impl WebViewDelegate for ServoWebViewDelegate {
                 self.user_data,
             )
         };
+    }
+
+    fn request_navigation(&self, mut webview: WebView, navigation_request: NavigationRequest) {
+        let Some(callback) = self.request_navigation else {
+            // Keep Servo's default path. Dropping the request without answering sends
+            // an allow, which is what an unhandled navigation request does upstream.
+            return;
+        };
+
+        let url = navigation_request.url.as_str();
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `url` outlives the call, so the borrowed pointer into it remains valid
+        // for its duration.
+        //
+        // The callback is contracted not to unwind, but it is contained here anyway
+        // so that a panicking embedder cannot unwind into Servo's event loop.
+        let allowed = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                url.as_ptr(),
+                url.len(),
+                self.user_data,
+            )
+        }));
+
+        match allowed {
+            Ok(true) => navigation_request.allow(),
+            Ok(false) => navigation_request.deny(),
+            // The embedder was asked and did not answer. Refuse rather than fall back
+            // to the permissive default: this hook exists so that navigations can be
+            // vetted, and a panicking callback must not become a silent bypass.
+            Err(..) => navigation_request.deny(),
+        }
+    }
+
+    fn notify_fullscreen_state_changed(&self, mut webview: WebView, is_fullscreen: bool) {
+        let Some(callback) = self.notify_fullscreen_state_changed else {
+            return;
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        unsafe { callback(&mut webview as *mut WebView, is_fullscreen, self.user_data) };
+    }
+
+    fn notify_cursor_changed(&self, mut webview: WebView, cursor: Cursor) {
+        let Some(callback) = self.notify_cursor_changed else {
+            return;
+        };
+
+        // `Cursor` is `#[repr(u8)]`, so its discriminants are part of upstream's
+        // layout and can be cast directly, the same way `LoadStatus` is.
+        let cursor = cursor as u32;
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        unsafe { callback(&mut webview as *mut WebView, cursor, self.user_data) };
+    }
+
+    fn notify_page_title_changed(&self, mut webview: WebView, title: Option<String>) {
+        let Some(callback) = self.notify_page_title_changed else {
+            return;
+        };
+
+        // `title` owns the string for the duration of the callback. A missing title
+        // is passed as `NULL`/`0`, which the embedder can tell apart from a title
+        // that is present and empty.
+        let (title_ptr, title_len) = match title.as_deref() {
+            Some(title) => (title.as_ptr(), title.len()),
+            None => (std::ptr::null(), 0),
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `title` outlives the call, so the borrowed pointer into it remains valid
+        // for its duration.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                title_ptr,
+                title_len,
+                self.user_data,
+            )
+        };
+    }
+
+    fn request_move_to(&self, mut webview: WebView, point: DeviceIntPoint) {
+        let Some(callback) = self.request_move_to else {
+            return;
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                point.x,
+                point.y,
+                self.user_data,
+            )
+        };
+    }
+
+    fn request_resize_to(&self, mut webview: WebView, requested_outer_size: DeviceIntSize) {
+        let Some(callback) = self.request_resize_to else {
+            return;
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                requested_outer_size.width,
+                requested_outer_size.height,
+                self.user_data,
+            )
+        };
+    }
+
+    fn request_unload(&self, mut webview: WebView, unload_request: AllowOrDenyRequest) {
+        let Some(callback) = self.request_unload else {
+            // Keep Servo's default path, which allows the unload.
+            return;
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle.
+        //
+        // The callback is contracted not to unwind, but it is contained here anyway
+        // so that a panicking embedder cannot unwind into Servo's event loop.
+        let allowed = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+            callback(&mut webview as *mut WebView, self.user_data)
+        }));
+
+        match allowed {
+            Ok(true) => unload_request.allow(),
+            Ok(false) => unload_request.deny(),
+            // Refused for the same reason as an unanswered navigation: see
+            // `request_navigation`.
+            Err(..) => unload_request.deny(),
+        }
     }
 
     fn embedder_control_flags(&self) -> u64 {
@@ -880,3 +1154,56 @@ mod tests {
         }
     }
 }
+
+/// The cursor values passed to [`ServoWebViewDelegate::notify_cursor_changed`].
+///
+/// These mirror the discriminants of upstream's `Cursor`, which is `#[repr(u8)]`, so the
+/// numbering is upstream's rather than this crate's. The compile-time assertion below is
+/// what keeps them in step: a variant inserted upstream rather than appended renumbers the
+/// set and fails the build here instead of silently changing what a value means.
+///
+/// `SERVO_CURSOR_DEFAULT` is the fallback an embedder must use for a value it does not
+/// recognise. It is upstream's own `#[default]` variant, so it is the value that already
+/// means "whatever this platform's ordinary pointer is" rather than a sentinel invented
+/// here. Casting an unrecognised value into an embedder-side enum instead is undefined on
+/// the embedder's side, which is the whole reason this constant is named.
+pub const SERVO_CURSOR_NONE: u32 = Cursor::None as u32;
+pub const SERVO_CURSOR_DEFAULT: u32 = Cursor::Default as u32;
+pub const SERVO_CURSOR_POINTER: u32 = Cursor::Pointer as u32;
+pub const SERVO_CURSOR_CONTEXT_MENU: u32 = Cursor::ContextMenu as u32;
+pub const SERVO_CURSOR_HELP: u32 = Cursor::Help as u32;
+pub const SERVO_CURSOR_PROGRESS: u32 = Cursor::Progress as u32;
+pub const SERVO_CURSOR_WAIT: u32 = Cursor::Wait as u32;
+pub const SERVO_CURSOR_CELL: u32 = Cursor::Cell as u32;
+pub const SERVO_CURSOR_CROSSHAIR: u32 = Cursor::Crosshair as u32;
+pub const SERVO_CURSOR_TEXT: u32 = Cursor::Text as u32;
+pub const SERVO_CURSOR_VERTICAL_TEXT: u32 = Cursor::VerticalText as u32;
+pub const SERVO_CURSOR_ALIAS: u32 = Cursor::Alias as u32;
+pub const SERVO_CURSOR_COPY: u32 = Cursor::Copy as u32;
+pub const SERVO_CURSOR_MOVE: u32 = Cursor::Move as u32;
+pub const SERVO_CURSOR_NO_DROP: u32 = Cursor::NoDrop as u32;
+pub const SERVO_CURSOR_NOT_ALLOWED: u32 = Cursor::NotAllowed as u32;
+pub const SERVO_CURSOR_GRAB: u32 = Cursor::Grab as u32;
+pub const SERVO_CURSOR_GRABBING: u32 = Cursor::Grabbing as u32;
+pub const SERVO_CURSOR_E_RESIZE: u32 = Cursor::EResize as u32;
+pub const SERVO_CURSOR_N_RESIZE: u32 = Cursor::NResize as u32;
+pub const SERVO_CURSOR_NE_RESIZE: u32 = Cursor::NeResize as u32;
+pub const SERVO_CURSOR_NW_RESIZE: u32 = Cursor::NwResize as u32;
+pub const SERVO_CURSOR_S_RESIZE: u32 = Cursor::SResize as u32;
+pub const SERVO_CURSOR_SE_RESIZE: u32 = Cursor::SeResize as u32;
+pub const SERVO_CURSOR_SW_RESIZE: u32 = Cursor::SwResize as u32;
+pub const SERVO_CURSOR_W_RESIZE: u32 = Cursor::WResize as u32;
+pub const SERVO_CURSOR_EW_RESIZE: u32 = Cursor::EwResize as u32;
+pub const SERVO_CURSOR_NS_RESIZE: u32 = Cursor::NsResize as u32;
+pub const SERVO_CURSOR_NESW_RESIZE: u32 = Cursor::NeswResize as u32;
+pub const SERVO_CURSOR_NWSE_RESIZE: u32 = Cursor::NwseResize as u32;
+pub const SERVO_CURSOR_COL_RESIZE: u32 = Cursor::ColResize as u32;
+pub const SERVO_CURSOR_ROW_RESIZE: u32 = Cursor::RowResize as u32;
+pub const SERVO_CURSOR_ALL_SCROLL: u32 = Cursor::AllScroll as u32;
+pub const SERVO_CURSOR_ZOOM_IN: u32 = Cursor::ZoomIn as u32;
+pub const SERVO_CURSOR_ZOOM_OUT: u32 = Cursor::ZoomOut as u32;
+
+const _: () = assert!(
+    SERVO_CURSOR_NONE == 0 && SERVO_CURSOR_DEFAULT == 1 && SERVO_CURSOR_ZOOM_OUT == 34,
+    "the SERVO_CURSOR_* values are part of the ABI and must not be renumbered"
+);

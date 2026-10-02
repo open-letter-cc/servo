@@ -18,6 +18,13 @@ crate-type = ["cdylib"]
 capi = [] # Needed by `cargo-c`.
 # TODO: Need to think about which features from servo can be
 # exposed here for conditional compilation of C API.
+# Compile the content-process entry point, `servo_content_process_main`.
+#
+# Off by default, because turning it on pulls upstream's multiprocess support
+# into the payload. The symbol is exported either way: without this feature it
+# resolves and returns SERVO_CONTENT_PROCESS_UNSUPPORTED, so an embedder detects
+# the gap by calling it rather than by failing to find it.
+multiprocess = ["servo/multiprocess"]
 
 [dependencies]
 dpi = { workspace = true }

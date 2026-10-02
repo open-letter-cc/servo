@@ -35,6 +35,15 @@ crate-type = ["cdylib"]
 # Deliberately identical to ffi/capi's, so that building this crate and
 # `servo-capi` in one `cargo` invocation resolves one feature set for `servo`
 # and compiles SpiderMonkey once.
+[features]
+# Compile the content-process entry point, `servo_content_process_main`.
+#
+# Off by default, because turning it on pulls upstream's multiprocess support
+# into the payload. The symbol is exported either way: without this feature it
+# resolves and returns SERVO_CONTENT_PROCESS_UNSUPPORTED, so an embedder detects
+# the gap by calling it rather than by failing to find it.
+multiprocess = ["servo/multiprocess"]
+
 [dependencies]
 dpi = { workspace = true }
 libc = { workspace = true }

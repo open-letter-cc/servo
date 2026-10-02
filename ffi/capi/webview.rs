@@ -6,7 +6,7 @@ use std::ffi::{CStr, c_void};
 use std::os::raw::c_char;
 use std::rc::Rc;
 
-use servo_api::{Servo, WebView, WebViewBuilder};
+use servo_api::{Servo, UserContentManager, UserScript, WebView, WebViewBuilder};
 
 use crate::rendering_context::RenderingContext;
 use crate::webview_delegate::ServoWebViewDelegate;
@@ -27,6 +27,10 @@ pub struct ServoWebViewBuilder {
     rendering_context: Rc<dyn servo_api::RenderingContext>,
     url: Option<url::Url>,
     delegate: Option<ServoWebViewDelegate>,
+    /// User scripts to install, in the order they were added. A `WebView` only has a
+    /// `UserContentManager` if at least one script is added before it is built, which
+    /// is also what makes `servo_webview_add_script` work on it afterwards.
+    user_scripts: Vec<String>,
 }
 
 /// Creates a handle to a new `WebViewBuilder` object for the given
@@ -78,6 +82,7 @@ pub unsafe extern "C" fn servo_webview_builder_create(
         rendering_context: boxed_c_context.inner,
         url: None,
         delegate: None,
+        user_scripts: Vec::new(),
     }))
 }
 
@@ -195,6 +200,17 @@ pub unsafe extern "C" fn servo_webview_builder_build(
     if let Some(delegate) = builder.delegate {
         webview_builder = webview_builder.delegate(std::rc::Rc::new(delegate));
     }
+
+    // Every `WebView` gets a `UserContentManager`, whether or not a script was added
+    // here. Creating it lazily would make `servo_webview_add_script` work only on a
+    // `WebView` that happened to be built with a script already, and there is no way to
+    // attach a manager after the fact — a conditional nobody remembers by the time a
+    // script is added later.
+    let user_content_manager = Rc::new(UserContentManager::new(&builder.servo));
+    for script in builder.user_scripts {
+        user_content_manager.add_script(Rc::new(UserScript::new(script, None)));
+    }
+    webview_builder = webview_builder.user_content_manager(user_content_manager);
 
     Box::into_raw(Box::new(webview_builder.build()))
 }
@@ -419,4 +435,125 @@ pub unsafe extern "C" fn servo_webview_free(webview: *mut WebView) {
     unsafe {
         let _ = Box::from_raw(webview);
     }
+}
+
+/// Adds a user script to be installed in every document this `WebView` loads.
+///
+/// The script runs in the document's own world, with the same capabilities as a
+/// `<script>` the page itself contained. Servo does not interpret it, and a script
+/// added here is the embedder's own code regardless of what the document is.
+///
+/// `script_ptr`/`script_len` are UTF-8 source, not NUL-terminated. The bytes are
+/// copied, so the caller may free them as soon as this returns. Scripts are
+/// installed in the order they are added.
+///
+/// This must be called before `servo_webview_builder_build`. Adding a script to a
+/// `WebView` that already exists is [`servo_webview_add_script`], which works on every
+/// `WebView` this function's builder produced whether or not a script was added here.
+///
+/// Returns `true` if the script was accepted, `false` if `script_ptr` is null with a
+/// non-zero length or the bytes are not valid UTF-8. A rejected script is not
+/// installed and the builder is left unchanged.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `builder` is a non-null pointer to a `ServoWebViewBuilder` previously returned
+///   by `servo_webview_builder_create` and not yet freed or built.
+/// - `script_ptr` is either null with a `script_len` of zero, or valid for reads of
+///   `script_len` bytes for the duration of the call.
+/// - The call is made from the thread that created `builder`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_builder_add_script(
+    builder: *mut ServoWebViewBuilder,
+    script_ptr: *const u8,
+    script_len: usize,
+) -> bool {
+    assert!(!builder.is_null(), "builder pointer must not be null");
+
+    // SAFETY: The caller is assumed to uphold the safety requirements documented
+    // above, which include those of `script_from_raw`.
+    let script = unsafe { script_from_raw(script_ptr, script_len) };
+    let Some(script) = script else {
+        return false;
+    };
+
+    // SAFETY: The caller is assumed to uphold the safety requirements for `builder`
+    // documented above. Ownership stays with the caller.
+    let builder = unsafe { &mut *builder };
+    builder.user_scripts.push(script);
+
+    true
+}
+
+/// Adds a user script to a `WebView` that already exists. It is installed in every
+/// document the `WebView` loads from now on, and not in the one already loaded.
+///
+/// See [`servo_webview_builder_add_script`] for what a user script is and how the
+/// bytes are treated.
+///
+/// Returns `true` if the script was accepted, and `false` if the bytes are rejected on
+/// the same terms as [`servo_webview_builder_add_script`].
+///
+/// Every `WebView` built by `servo_webview_builder_build` carries a user-content
+/// manager, so this does not depend on a script having been added at build time. A
+/// `false` return therefore always means the bytes were rejected, never that the
+/// `WebView` was the wrong kind.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `webview` is a non-null pointer to a `WebView` previously returned by
+///   `servo_webview_builder_build` and not yet freed.
+/// - `script_ptr` is either null with a `script_len` of zero, or valid for reads of
+///   `script_len` bytes for the duration of the call.
+/// - The call is made from the thread that created `webview`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_add_script(
+    webview: *mut WebView,
+    script_ptr: *const u8,
+    script_len: usize,
+) -> bool {
+    assert!(!webview.is_null(), "webview pointer must not be null");
+
+    // SAFETY: The caller is assumed to uphold the safety requirements documented
+    // above, which include those of `script_from_raw`.
+    let script = unsafe { script_from_raw(script_ptr, script_len) };
+    let Some(script) = script else {
+        return false;
+    };
+
+    // SAFETY: The caller is assumed to uphold the safety requirements for `webview`
+    // documented above. Ownership stays with the caller.
+    let webview = unsafe { &*webview };
+
+    let Some(user_content_manager) = webview.user_content_manager() else {
+        return false;
+    };
+    user_content_manager.add_script(Rc::new(UserScript::new(script, None)));
+
+    true
+}
+
+/// Copy a borrowed UTF-8 script out of embedder memory, or `None` if the pointer and
+/// length do not describe valid UTF-8.
+///
+/// # Safety
+///
+/// `script_ptr` must be either null with a `script_len` of zero, or valid for reads
+/// of `script_len` bytes.
+unsafe fn script_from_raw(script_ptr: *const u8, script_len: usize) -> Option<String> {
+    if script_len == 0 {
+        return Some(String::new());
+    }
+    if script_ptr.is_null() {
+        return None;
+    }
+
+    // SAFETY: The caller guarantees that `script_ptr` is valid for reads of
+    // `script_len` bytes. The slice is copied and not held past this call.
+    let bytes = unsafe { std::slice::from_raw_parts(script_ptr, script_len) };
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
