@@ -1397,43 +1397,86 @@ mod tests {
 /// means "whatever this platform's ordinary pointer is" rather than a sentinel invented
 /// here. Casting an unrecognised value into an embedder-side enum instead is undefined on
 /// the embedder's side, which is the whole reason this constant is named.
-pub const SERVO_CURSOR_NONE: u32 = Cursor::None as u32;
-pub const SERVO_CURSOR_DEFAULT: u32 = Cursor::Default as u32;
-pub const SERVO_CURSOR_POINTER: u32 = Cursor::Pointer as u32;
-pub const SERVO_CURSOR_CONTEXT_MENU: u32 = Cursor::ContextMenu as u32;
-pub const SERVO_CURSOR_HELP: u32 = Cursor::Help as u32;
-pub const SERVO_CURSOR_PROGRESS: u32 = Cursor::Progress as u32;
-pub const SERVO_CURSOR_WAIT: u32 = Cursor::Wait as u32;
-pub const SERVO_CURSOR_CELL: u32 = Cursor::Cell as u32;
-pub const SERVO_CURSOR_CROSSHAIR: u32 = Cursor::Crosshair as u32;
-pub const SERVO_CURSOR_TEXT: u32 = Cursor::Text as u32;
-pub const SERVO_CURSOR_VERTICAL_TEXT: u32 = Cursor::VerticalText as u32;
-pub const SERVO_CURSOR_ALIAS: u32 = Cursor::Alias as u32;
-pub const SERVO_CURSOR_COPY: u32 = Cursor::Copy as u32;
-pub const SERVO_CURSOR_MOVE: u32 = Cursor::Move as u32;
-pub const SERVO_CURSOR_NO_DROP: u32 = Cursor::NoDrop as u32;
-pub const SERVO_CURSOR_NOT_ALLOWED: u32 = Cursor::NotAllowed as u32;
-pub const SERVO_CURSOR_GRAB: u32 = Cursor::Grab as u32;
-pub const SERVO_CURSOR_GRABBING: u32 = Cursor::Grabbing as u32;
-pub const SERVO_CURSOR_E_RESIZE: u32 = Cursor::EResize as u32;
-pub const SERVO_CURSOR_N_RESIZE: u32 = Cursor::NResize as u32;
-pub const SERVO_CURSOR_NE_RESIZE: u32 = Cursor::NeResize as u32;
-pub const SERVO_CURSOR_NW_RESIZE: u32 = Cursor::NwResize as u32;
-pub const SERVO_CURSOR_S_RESIZE: u32 = Cursor::SResize as u32;
-pub const SERVO_CURSOR_SE_RESIZE: u32 = Cursor::SeResize as u32;
-pub const SERVO_CURSOR_SW_RESIZE: u32 = Cursor::SwResize as u32;
-pub const SERVO_CURSOR_W_RESIZE: u32 = Cursor::WResize as u32;
-pub const SERVO_CURSOR_EW_RESIZE: u32 = Cursor::EwResize as u32;
-pub const SERVO_CURSOR_NS_RESIZE: u32 = Cursor::NsResize as u32;
-pub const SERVO_CURSOR_NESW_RESIZE: u32 = Cursor::NeswResize as u32;
-pub const SERVO_CURSOR_NWSE_RESIZE: u32 = Cursor::NwseResize as u32;
-pub const SERVO_CURSOR_COL_RESIZE: u32 = Cursor::ColResize as u32;
-pub const SERVO_CURSOR_ROW_RESIZE: u32 = Cursor::RowResize as u32;
-pub const SERVO_CURSOR_ALL_SCROLL: u32 = Cursor::AllScroll as u32;
-pub const SERVO_CURSOR_ZOOM_IN: u32 = Cursor::ZoomIn as u32;
-pub const SERVO_CURSOR_ZOOM_OUT: u32 = Cursor::ZoomOut as u32;
+pub const SERVO_CURSOR_NONE: u32 = 0;
+pub const SERVO_CURSOR_DEFAULT: u32 = 1;
+pub const SERVO_CURSOR_POINTER: u32 = 2;
+pub const SERVO_CURSOR_CONTEXT_MENU: u32 = 3;
+pub const SERVO_CURSOR_HELP: u32 = 4;
+pub const SERVO_CURSOR_PROGRESS: u32 = 5;
+pub const SERVO_CURSOR_WAIT: u32 = 6;
+pub const SERVO_CURSOR_CELL: u32 = 7;
+pub const SERVO_CURSOR_CROSSHAIR: u32 = 8;
+pub const SERVO_CURSOR_TEXT: u32 = 9;
+pub const SERVO_CURSOR_VERTICAL_TEXT: u32 = 10;
+pub const SERVO_CURSOR_ALIAS: u32 = 11;
+pub const SERVO_CURSOR_COPY: u32 = 12;
+pub const SERVO_CURSOR_MOVE: u32 = 13;
+pub const SERVO_CURSOR_NO_DROP: u32 = 14;
+pub const SERVO_CURSOR_NOT_ALLOWED: u32 = 15;
+pub const SERVO_CURSOR_GRAB: u32 = 16;
+pub const SERVO_CURSOR_GRABBING: u32 = 17;
+pub const SERVO_CURSOR_E_RESIZE: u32 = 18;
+pub const SERVO_CURSOR_N_RESIZE: u32 = 19;
+pub const SERVO_CURSOR_NE_RESIZE: u32 = 20;
+pub const SERVO_CURSOR_NW_RESIZE: u32 = 21;
+pub const SERVO_CURSOR_S_RESIZE: u32 = 22;
+pub const SERVO_CURSOR_SE_RESIZE: u32 = 23;
+pub const SERVO_CURSOR_SW_RESIZE: u32 = 24;
+pub const SERVO_CURSOR_W_RESIZE: u32 = 25;
+pub const SERVO_CURSOR_EW_RESIZE: u32 = 26;
+pub const SERVO_CURSOR_NS_RESIZE: u32 = 27;
+pub const SERVO_CURSOR_NESW_RESIZE: u32 = 28;
+pub const SERVO_CURSOR_NWSE_RESIZE: u32 = 29;
+pub const SERVO_CURSOR_COL_RESIZE: u32 = 30;
+pub const SERVO_CURSOR_ROW_RESIZE: u32 = 31;
+pub const SERVO_CURSOR_ALL_SCROLL: u32 = 32;
+pub const SERVO_CURSOR_ZOOM_IN: u32 = 33;
+pub const SERVO_CURSOR_ZOOM_OUT: u32 = 34;
 
+// Each value is written as a literal rather than as `Cursor::X as u32`, so that it
+// reaches the generated header as a usable `#define`. A cast of an enum belonging to
+// another crate does not: cbindgen cannot resolve it to a number and emits a reference
+// to a type this header does not declare, which is how these constants came to be
+// missing from the header entirely while still being documented as the ABI.
+//
+// The assertion below is what the cast used to provide. It covers every value, so a
+// variant inserted upstream rather than appended fails the build here instead of
+// silently changing what a value means on the far side of the ABI.
 const _: () = assert!(
-    SERVO_CURSOR_NONE == 0 && SERVO_CURSOR_DEFAULT == 1 && SERVO_CURSOR_ZOOM_OUT == 34,
-    "the SERVO_CURSOR_* values are part of the ABI and must not be renumbered"
+    SERVO_CURSOR_NONE == Cursor::None as u32
+        && SERVO_CURSOR_DEFAULT == Cursor::Default as u32
+        && SERVO_CURSOR_POINTER == Cursor::Pointer as u32
+        && SERVO_CURSOR_CONTEXT_MENU == Cursor::ContextMenu as u32
+        && SERVO_CURSOR_HELP == Cursor::Help as u32
+        && SERVO_CURSOR_PROGRESS == Cursor::Progress as u32
+        && SERVO_CURSOR_WAIT == Cursor::Wait as u32
+        && SERVO_CURSOR_CELL == Cursor::Cell as u32
+        && SERVO_CURSOR_CROSSHAIR == Cursor::Crosshair as u32
+        && SERVO_CURSOR_TEXT == Cursor::Text as u32
+        && SERVO_CURSOR_VERTICAL_TEXT == Cursor::VerticalText as u32
+        && SERVO_CURSOR_ALIAS == Cursor::Alias as u32
+        && SERVO_CURSOR_COPY == Cursor::Copy as u32
+        && SERVO_CURSOR_MOVE == Cursor::Move as u32
+        && SERVO_CURSOR_NO_DROP == Cursor::NoDrop as u32
+        && SERVO_CURSOR_NOT_ALLOWED == Cursor::NotAllowed as u32
+        && SERVO_CURSOR_GRAB == Cursor::Grab as u32
+        && SERVO_CURSOR_GRABBING == Cursor::Grabbing as u32
+        && SERVO_CURSOR_E_RESIZE == Cursor::EResize as u32
+        && SERVO_CURSOR_N_RESIZE == Cursor::NResize as u32
+        && SERVO_CURSOR_NE_RESIZE == Cursor::NeResize as u32
+        && SERVO_CURSOR_NW_RESIZE == Cursor::NwResize as u32
+        && SERVO_CURSOR_S_RESIZE == Cursor::SResize as u32
+        && SERVO_CURSOR_SE_RESIZE == Cursor::SeResize as u32
+        && SERVO_CURSOR_SW_RESIZE == Cursor::SwResize as u32
+        && SERVO_CURSOR_W_RESIZE == Cursor::WResize as u32
+        && SERVO_CURSOR_EW_RESIZE == Cursor::EwResize as u32
+        && SERVO_CURSOR_NS_RESIZE == Cursor::NsResize as u32
+        && SERVO_CURSOR_NESW_RESIZE == Cursor::NeswResize as u32
+        && SERVO_CURSOR_NWSE_RESIZE == Cursor::NwseResize as u32
+        && SERVO_CURSOR_COL_RESIZE == Cursor::ColResize as u32
+        && SERVO_CURSOR_ROW_RESIZE == Cursor::RowResize as u32
+        && SERVO_CURSOR_ALL_SCROLL == Cursor::AllScroll as u32
+        && SERVO_CURSOR_ZOOM_IN == Cursor::ZoomIn as u32
+        && SERVO_CURSOR_ZOOM_OUT == Cursor::ZoomOut as u32,
+    "the SERVO_CURSOR_* values are the ABI and must agree with upstream's Cursor"
 );
