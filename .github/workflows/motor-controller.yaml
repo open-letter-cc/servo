@@ -276,7 +276,11 @@ jobs:
             # so the webview call only works on a webview built with at least one
             # script; both are classified here in the commit that implements them.
             'servo_webview_builder_add_script',
-            'servo_webview_add_script'
+            'servo_webview_add_script',
+            # Accepts a script-requested new browsing context. Without it the
+            # request_create_new delegate can only decline, since claiming the
+            # request is the only thing that makes the open proceed.
+            'servo_webview_accept_new'
           )
 
           $gated = $required + $optional

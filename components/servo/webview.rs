@@ -252,10 +252,12 @@ impl WebView {
 
     pub(crate) fn request_create_new(
         &self,
+        requested_url: Url,
         response_sender: GenericSender<Option<NewWebViewDetails>>,
     ) {
         let request = CreateNewWebViewRequest {
             servo: self.servo(),
+            requested_url,
             responder: AutomaticResponder::new(response_sender, None),
         };
         self.delegate().request_create_new(self.clone(), request);

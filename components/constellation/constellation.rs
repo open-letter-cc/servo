@@ -3680,6 +3680,7 @@ where
         self.constellation_to_embedder_proxy
             .send(ConstellationToEmbedderMsg::AllowOpeningWebView(
                 opener_webview_id,
+                load_data.url.clone(),
                 webview_id_sender,
             ));
         let NewWebViewDetails {

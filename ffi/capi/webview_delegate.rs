@@ -8,9 +8,12 @@ use std::panic::{self, AssertUnwindSafe};
 
 pub use servo_api::LoadStatus;
 use servo_api::{
-    AllowOrDenyRequest, ContextMenuAction, Cursor, DeviceIntPoint, DeviceIntSize, EmbedderControl,
-    EmbedderControlTag, NavigationRequest, SelectElementOptionOrOptgroup, WebView, WebViewDelegate,
+    AllowOrDenyRequest, ContextMenuAction, CreateNewWebViewRequest, Cursor, DeviceIntPoint,
+    DeviceIntSize, EmbedderControl, EmbedderControlTag, NavigationRequest,
+    SelectElementOptionOrOptgroup, UserContentManager, WebView, WebViewDelegate,
 };
+
+use crate::rendering_context::RenderingContext;
 
 /// The delegate that receives notifications about `WebView` events.
 ///
@@ -48,7 +51,14 @@ use servo_api::{
 /// - The `webview` argument is not retained or used after the callback
 ///   returns and is not passed to `servo_webview_free` or any other
 ///   function that takes ownership of the `WebView`.
+///
+/// # Copying
+///
+/// Every field is a pointer or a nullable function pointer, so this is `Copy`. That is
+/// what lets [`servo_webview_accept_new`] take a delegate by pointer and snapshot it
+/// for the `WebView` it creates.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ServoWebViewDelegate {
     /// An opaque pointer passed to all delegate callbacks. May be `NULL`.
     pub user_data: *mut c_void,
@@ -247,6 +257,37 @@ pub struct ServoWebViewDelegate {
     /// bypass. See `request_navigation` for the full rationale.
     pub request_unload:
         Option<unsafe extern "C" fn(webview: *mut WebView, user_data: *mut c_void) -> bool>,
+
+    /// Called when script asks for a new top-level browsing context, through
+    /// `window.open` or a target that names a new context.
+    ///
+    /// `webview` is the opener. `request` describes what was asked for and is valid
+    /// only for the duration of this call.
+    ///
+    /// Call [`servo_webview_accept_new`] with `request` to accept, or do nothing to
+    /// decline. Declining is what an embedder does when the open belongs somewhere
+    /// other than a new browsing context: script then sees the blocked open it already
+    /// has to handle, and the embedder is free to do what it likes with the requested
+    /// URL instead. Nothing links the two, so a URL opened that way is a fresh load,
+    /// not a continuation of this one.
+    ///
+    /// The return value is advisory and is not what decides the outcome: the outcome is
+    /// decided by whether the request was claimed. Returning `true` without accepting
+    /// still declines.
+    ///
+    /// # This call blocks the engine
+    ///
+    /// Servo's constellation is stopped, waiting for the answer, from the moment this is
+    /// called until it returns. Whatever the embedder does here — creating a window,
+    /// creating a rendering context — happens on the engine's clock, so it should
+    /// answer promptly rather than, say, waiting on user input.
+    pub request_create_new: Option<
+        unsafe extern "C" fn(
+            webview: *mut WebView,
+            request: *const ServoNewWebViewRequest,
+            user_data: *mut c_void,
+        ) -> bool,
+    >,
 }
 
 // Adding a field here changes this number. Update it deliberately, state the
@@ -255,8 +296,8 @@ pub struct ServoWebViewDelegate {
 // built against an older header fails by reading a struct that is too short
 // rather than by misreading an existing field.
 const _: () = assert!(
-    size_of::<ServoWebViewDelegate>() == 120,
-    "ServoWebViewDelegate must stay 120 bytes wide"
+    size_of::<ServoWebViewDelegate>() == 128,
+    "ServoWebViewDelegate must stay 128 bytes wide"
 );
 
 impl WebViewDelegate for ServoWebViewDelegate {
@@ -536,6 +577,68 @@ impl WebViewDelegate for ServoWebViewDelegate {
         }
     }
 
+    fn request_create_new(
+        &self,
+        mut webview: WebView,
+        create_new_webview_request: CreateNewWebViewRequest,
+    ) {
+        let Some(callback) = self.request_create_new else {
+            // Keep Servo's default path: dropping the request answers it with `None`,
+            // which script sees as a blocked open.
+            return;
+        };
+
+        // `url` owns the serialization for the duration of the callback, in the same way
+        // as every other string this delegate passes out.
+        let url = create_new_webview_request
+            .requested_url()
+            .as_str()
+            .to_owned();
+        let request = ServoNewWebViewRequest {
+            url_ptr: url.as_ptr(),
+            url_len: url.len(),
+        };
+
+        // Make the request claimable by `servo_webview_accept_new` for the duration of
+        // the callback, keyed by the address of the borrowed view the embedder is handed.
+        IN_FLIGHT_NEW_WEBVIEW.with(|in_flight| {
+            in_flight.borrow_mut().push(InFlightNewWebView {
+                view: &request as *const ServoNewWebViewRequest,
+                request: Some(create_new_webview_request),
+            })
+        });
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements of the
+        // `ServoWebViewDelegate` struct.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `request` borrows `url`, which outlives the call.
+        //
+        // The callback is contracted not to unwind, but it is contained here anyway so
+        // that a panicking embedder cannot tear down Servo or strand the request.
+        let _advisory = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+            callback(
+                &mut webview as *mut WebView,
+                &request as *const ServoNewWebViewRequest,
+                self.user_data,
+            )
+        }));
+
+        drop(url);
+
+        // Whether the open proceeds is decided by whether the request was claimed, not by
+        // the return value. A claimed request has already answered the constellation with
+        // the new webview; an unclaimed one is dropped here, which answers `None` and
+        // leaves script with the blocked open it already handles.
+        let reclaimed = IN_FLIGHT_NEW_WEBVIEW.with(|in_flight| {
+            in_flight
+                .borrow_mut()
+                .pop()
+                .and_then(|in_flight| in_flight.request)
+        });
+        drop(reclaimed);
+    }
+
     fn embedder_control_flags(&self) -> u64 {
         self.controller().map_or(0, |controller| controller.flags)
     }
@@ -739,6 +842,124 @@ const _: () = assert!(
     size_of::<ServoEmbedderController>() == 16,
     "ServoEmbedderController must stay 16 bytes wide"
 );
+
+/// A request from script for a new top-level browsing context, as passed to
+/// [`ServoWebViewDelegate::request_create_new`].
+///
+/// This is a borrowed view that is valid only for the duration of that call; the
+/// embedder must copy anything it needs to retain and must not use the pointer after the
+/// callback returns.
+#[repr(C)]
+pub struct ServoNewWebViewRequest {
+    /// The URL the open requested, as a serialization. Not NUL-terminated, and borrowed
+    /// for the duration of the callback only.
+    pub url_ptr: *const u8,
+    /// The length of `url_ptr` in bytes.
+    pub url_len: usize,
+}
+
+const _: () = assert!(
+    size_of::<ServoNewWebViewRequest>() == 16,
+    "ServoNewWebViewRequest must stay 16 bytes wide"
+);
+
+/// A new-browsing-context request currently being offered to
+/// [`ServoWebViewDelegate::request_create_new`] and not yet claimed, together with the
+/// address of the borrowed [`ServoNewWebViewRequest`] view the embedder was handed. The
+/// view address is what [`servo_webview_accept_new`] matches on, the same way
+/// [`servo_webview_send_response`] matches a control.
+struct InFlightNewWebView {
+    view: *const ServoNewWebViewRequest,
+    /// `None` once the embedder has claimed it.
+    request: Option<CreateNewWebViewRequest>,
+}
+
+thread_local! {
+    /// The new-browsing-context requests currently being offered on this thread,
+    /// innermost last, so that an embedder whose handling of one open triggers another
+    /// cannot strand or misroute the outer request.
+    static IN_FLIGHT_NEW_WEBVIEW: RefCell<Vec<InFlightNewWebView>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Accept the new-browsing-context request currently being offered to
+/// [`ServoWebViewDelegate::request_create_new`], creating the `WebView` for it.
+///
+/// `request` is the pointer that callback received. `context` is the rendering context
+/// the new `WebView` draws into, which the embedder has created on a window it owns;
+/// **ownership of `context` transfers to this function** on success, as it does for
+/// `servo_webview_builder_create`. `delegate`, when non-null, is copied out and becomes
+/// the new `WebView`'s delegate; pass `NULL` to create it without one.
+///
+/// Returns the new `WebView`, whose ownership transfers to the caller and which must be
+/// freed with `servo_webview_free`.
+///
+/// Returns `NULL` **without consuming `context`** if `request` or `context` is `NULL`,
+/// if `request` does not name a request currently being offered on this thread, or if
+/// that request has already been claimed — so a failed call leaves the caller's context
+/// theirs to reuse or free.
+///
+/// The returned `WebView` carries a user-content manager, so `servo_webview_add_script`
+/// works on it, exactly as it does for one built through `servo_webview_builder_build`.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - This is called from inside `request_create_new`, on the same thread, with the
+///   `request` pointer that call received, and not after it has returned.
+/// - `context` is a non-null pointer to a `RenderingContext` previously returned by one
+///   of the `servo_rendering_context_create_*` functions, not yet freed nor passed to
+///   another function that takes ownership of it.
+/// - `delegate`, when non-null, points to a valid `ServoWebViewDelegate` whose function
+///   pointers and `user_data` remain valid for as long as the returned `WebView` lives.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_accept_new(
+    request: *const ServoNewWebViewRequest,
+    context: *mut RenderingContext,
+    delegate: *const ServoWebViewDelegate,
+) -> *mut WebView {
+    if request.is_null() || context.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // Claim the request before taking ownership of anything, so that a call naming no
+    // live request leaves the caller's context untouched for them to reuse or free.
+    let claimed = IN_FLIGHT_NEW_WEBVIEW.with(|in_flight| {
+        let mut in_flight = in_flight.borrow_mut();
+        in_flight
+            .iter_mut()
+            .rev()
+            .find(|slot| std::ptr::eq(slot.view, request))
+            .and_then(|slot| slot.request.take())
+    });
+    let Some(claimed) = claimed else {
+        return std::ptr::null_mut();
+    };
+
+    // `builder` consumes the request, so take the instance first: the user-content
+    // manager below needs it.
+    let servo = claimed.servo().clone();
+
+    // SAFETY: The caller is assumed to uphold the safety requirements documented above.
+    // Ownership of `context` transfers here.
+    let rendering_context = unsafe { Box::from_raw(context) }.inner;
+
+    let mut builder = claimed.builder(rendering_context);
+
+    // SAFETY: As documented above, `delegate` is either null or a valid
+    // `ServoWebViewDelegate`. It is `Copy`, so this snapshots it rather than aliasing
+    // the embedder's storage.
+    if let Some(delegate) = unsafe { delegate.as_ref() } {
+        builder = builder.delegate(std::rc::Rc::new(*delegate));
+    }
+
+    // Matching `servo_webview_builder_build`: every `WebView` gets a user-content
+    // manager, so that `servo_webview_add_script` works on it afterwards.
+    builder = builder.user_content_manager(std::rc::Rc::new(UserContentManager::new(&servo)));
+
+    Box::into_raw(Box::new(builder.build()))
+}
 
 /// Generic embedder control extension, no domain logic.
 ///

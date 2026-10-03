@@ -279,7 +279,22 @@ pub unsafe extern "C" fn servo_webview_paint(webview: *mut WebView) {
 /// The function panics if it is not a valid UTF-8 string.
 /// The ownership of `url` remains with the caller after the call.
 ///
-/// Returns 0 on success, or -1 if the URL could not be parsed.
+/// Returns 0 on success, or -1 if the URL could not be parsed. **The return
+/// value reports only whether the URL parsed**, not that the load will
+/// happen: the load is handed to Servo without acknowledgement, and nothing
+/// here can report what becomes of it.
+///
+/// # Loading before the first load has committed
+///
+/// A `WebView` begins loading as soon as it is built — the URL given to
+/// `servo_webview_builder_set_url`, or `about:blank` when none was given. A
+/// load issued through this function before that first load has committed
+/// may be superseded by it and silently dropped, having already returned 0.
+///
+/// To open a `WebView` on a particular URL, set it on the builder rather
+/// than building the `WebView` and loading immediately afterwards. Where a
+/// load really must follow creation, wait until
+/// `notify_load_status_changed` reports `SERVO_LOAD_STATUS_COMPLETE` first.
 ///
 /// # Safety
 ///

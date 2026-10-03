@@ -959,10 +959,34 @@ impl PromptDialog {
 /// Refer to the documentation of [`WebViewDelegate::request_create_new`] for more information.
 pub struct CreateNewWebViewRequest {
     pub(crate) servo: Servo,
+    pub(crate) requested_url: Url,
     pub(crate) responder: AutomaticResponder<Option<NewWebViewDetails>>,
 }
 
 impl CreateNewWebViewRequest {
+    /// The URL the open requested.
+    ///
+    /// An embedder that decides what kind of view a new browsing context becomes, or
+    /// which window it goes in, needs this before it answers — and may legitimately
+    /// answer by declining and opening the URL itself somewhere else. Servo attaches
+    /// no meaning to it beyond passing it through.
+    ///
+    /// Note that declining and loading this URL elsewhere is not the same as letting
+    /// the open proceed: script sees the blocked-open it already handles, and the new
+    /// browsing context is never created, so nothing links the two.
+    pub fn requested_url(&self) -> &Url {
+        &self.requested_url
+    }
+
+    /// The [`Servo`] instance this request belongs to.
+    ///
+    /// [`Self::builder`] consumes the request, so an embedder that needs the instance
+    /// while building — to construct a [`UserContentManager`](crate::UserContentManager),
+    /// for example — takes it from here first.
+    pub fn servo(&self) -> &Servo {
+        &self.servo
+    }
+
     /// Returns a [`WebViewBuilder`] that can be used to create a new auxiliary [`WebView`].
     pub fn builder(self, rendering_context: Rc<dyn RenderingContext>) -> WebViewBuilder {
         WebViewBuilder::new_for_create_request(&self.servo, rendering_context, self.responder)

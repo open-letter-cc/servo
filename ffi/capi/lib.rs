@@ -314,7 +314,7 @@ mod tests {
         );
 
         assert_eq!(size_of::<ServoEventLoopWaker>(), 16);
-        assert_eq!(size_of::<ServoWebViewDelegate>(), 120);
+        assert_eq!(size_of::<ServoWebViewDelegate>(), 128);
         assert_eq!(size_of::<ServoEmbedderController>(), 16);
         assert_eq!(size_of::<ServoEmbedderControl>(), 40);
     }

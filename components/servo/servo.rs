@@ -801,9 +801,13 @@ impl ServoInner {
                     webview.delegate().request_navigation(webview, request);
                 }
             },
-            ConstellationToEmbedderMsg::AllowOpeningWebView(webview_id, response_sender) => {
+            ConstellationToEmbedderMsg::AllowOpeningWebView(
+                webview_id,
+                requested_url,
+                response_sender,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
-                    webview.request_create_new(response_sender);
+                    webview.request_create_new(requested_url.into_url(), response_sender);
                 }
             },
             ConstellationToEmbedderMsg::WebViewClosed(webview_id) => {
