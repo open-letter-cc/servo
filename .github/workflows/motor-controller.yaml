@@ -31,9 +31,26 @@ on:
       - ".github/workflows/motor-controller.yaml"
   # So the DLL can be rebuilt without touching source.
   workflow_dispatch:
+    inputs:
+      multiprocess:
+        description: >-
+          Build with upstream's multiprocess feature on. Off for every push, so
+          the payload a push produces is always the single-process one.
+        type: boolean
+        default: false
+      release:
+        description: >-
+          Also publish the payload as a GitHub release tagged after this commit.
+          Off for every push: a release is permanent and a push is not, so this
+          is only ever asked for deliberately.
+        type: boolean
+        default: false
 
+# The multiprocess variant is keyed separately, so dispatching one does not
+# cancel the push build of the default payload. Without that they share a group
+# and the second to start kills the first.
 concurrency:
-  group: motor-controller-${{ github.ref }}
+  group: motor-controller-${{ github.ref }}-${{ inputs.multiprocess && 'multiprocess' || 'default' }}
   cancel-in-progress: true
 
 env:
@@ -54,6 +71,13 @@ jobs:
   build:
     name: Windows libservo DLL
     runs-on: windows-latest
+    # `contents: write` is only needed by the release step, which is gated behind
+    # an explicit dispatch input. Declared here because the default token is
+    # read-only when the repository is configured that way, and a release that
+    # fails on permissions after an hour of building is an expensive way to find
+    # that out.
+    permissions:
+      contents: write
     # A cold release build of libservo (SpiderMonkey + ANGLE) plus a second
     # feature-distinct build for motor-controller does not fit in the default
     # timeout.
@@ -109,8 +133,14 @@ jobs:
       # compile SpiderMonkey again. `-p servo-capi` is deliberately NOT in this
       # list - the shim compiles every line of it already, so building it too
       # would only add a second multi-minute cdylib link of the same code.
+      #
+      # The multiprocess feature is enabled on the shim rather than globally:
+      # `--features multiprocess` in a multi-package build would try to apply it
+      # to servoshell too, which does not declare it. Note that a payload built
+      # this way resolves a different libservo feature set from the default one,
+      # so it recompiles SpiderMonkey rather than reusing the push build's cache.
       - name: Build libservo C ABI DLL and servoshell (release)
-        run: cargo build -p zdr-capi-shim -p servoshell --release
+        run: cargo build -p zdr-capi-shim -p servoshell --release ${{ inputs.multiprocess && '--features zdr-capi-shim/multiprocess' || '' }}
 
       - name: Stage servo.dll
         run: |
@@ -280,7 +310,12 @@ jobs:
             # Accepts a script-requested new browsing context. Without it the
             # request_create_new delegate can only decline, since claiming the
             # request is the only thing that makes the open proceed.
-            'servo_webview_accept_new'
+            'servo_webview_accept_new',
+            # Says which feature set this payload was built with. Two payloads
+            # that differ only in a feature are indistinguishable by inspection,
+            # so this is how an embedder refuses at load instead of discovering
+            # it when the behaviour turns out to be absent.
+            'servo_capi_build_features'
           )
 
           $gated = $required + $optional
@@ -373,10 +408,14 @@ jobs:
           "| :--- | :--- |" >> $env:GITHUB_STEP_SUMMARY
           $rows | ForEach-Object { "| ``$($_.File)`` | ``$($_.'SHA-256')`` |" >> $env:GITHUB_STEP_SUMMARY }
 
+      # The multiprocess payload is named apart from the default one on purpose.
+      # They are the same three files and differ only in a feature that changes
+      # whether content runs in this process, which is not visible by inspecting
+      # them; one name for both is how the wrong one gets staged.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libservo-windows-dll
+          name: libservo-windows-dll${{ inputs.multiprocess && '-multiprocess' || '' }}
           # Exactly three files, all from this run. ANGLE's pair is not
           # optional: servo.dll needs it at runtime on Windows (see
           # ffi/capi/Cargo.toml), and surfman `LoadLibrary`s it by name when the
@@ -388,6 +427,58 @@ jobs:
             target/release/libGLESv2.dll
           if-no-files-found: error
           retention-days: 30
+
+      # Only on an explicit dispatch. Deliberately after the artifact upload, so
+      # that a failure to publish still leaves the payload downloadable, and before
+      # the seam build for the same reason that step is last.
+      #
+      # The tag names the commit rather than a version: this payload is identified
+      # by what built it, and the engine's own crate version says nothing about the
+      # C ABI, which is what an embedder actually binds against. The ABI version and
+      # the feature set are recorded in the body instead, since the three files are
+      # indistinguishable from the ones built with different features.
+      - name: Publish GitHub release
+        if: ${{ inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $suffix = if ("${{ inputs.multiprocess }}" -eq "true") { "-multiprocess" } else { "" }
+          $tag = "capi-$($env:GITHUB_SHA.Substring(0,11))$suffix"
+
+          $files = @("$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll")
+          Get-FileHash -Algorithm SHA256 $files |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding utf8 "$rel\SHA256SUMS"
+
+          $notes = @"
+          Windows libservo C ABI payload built from ``$env:GITHUB_SHA``.
+
+          | | |
+          | :--- | :--- |
+          | commit | ``$env:GITHUB_SHA`` |
+          | C ABI version | reported by ``servo_capi_abi_version()`` |
+          | multiprocess feature | ${{ inputs.multiprocess && 'on' || 'off' }} |
+          | workflow run | $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID |
+
+          Load ``servo.dll`` with ``libEGL.dll`` and ``libGLESv2.dll`` beside it; surfman
+          loads ANGLE by name when the first rendering context is created, so all three
+          must travel together. ``servo_capi_build_features()`` reports which feature set
+          this payload was built with.
+
+          The matching ``servo_capi.h`` is not attached: it is produced by ``cargo-c``,
+          which this job does not run, and generating it would mean a second cdylib link
+          of the same code.
+
+          Licensed under MPL-2.0. Source is this repository at the commit above.
+          "@
+          $notes = $notes -replace '(?m)^          ', ''
+          Set-Content -Encoding utf8 "$env:RUNNER_TEMP\notes.md" $notes
+
+          gh release create $tag $files "$rel\SHA256SUMS" `
+            --target $env:GITHUB_SHA `
+            --title $tag `
+            --notes-file "$env:RUNNER_TEMP\notes.md"
 
       # Last, so a failure here cannot cost the run its DLL artifact.
       - name: Build motor-controller against real libservo (release)

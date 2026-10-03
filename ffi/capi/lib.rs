@@ -54,6 +54,41 @@ pub extern "C" fn servo_capi_abi_version() -> u32 {
     SERVO_CAPI_ABI_VERSION
 }
 
+/// This build has upstream's multiprocess support compiled in, so
+/// `servo_options_set_multiprocess` has an effect and
+/// [`servo_content_process_main`](crate::servo::servo_content_process_main) can serve
+/// a content process rather than reporting that it cannot.
+pub const SERVO_CAPI_FEATURE_MULTIPROCESS: u64 = 1 << 0;
+
+/// Returns a bitmask of the `SERVO_CAPI_FEATURE_*` bits this build was compiled with.
+///
+/// Two payloads built from the same source with different features are the same set of
+/// filenames and cannot be told apart by inspecting them. This is how an embedder asks
+/// which one it has, at load, rather than finding out when the behaviour it depends on
+/// turns out to be absent — for multiprocess, that would be the first content process
+/// failing to start.
+///
+/// Bits outside the `SERVO_CAPI_FEATURE_*` set this build knows about are zero, and new
+/// bits may be defined later. An embedder should test the bits it cares about and ignore
+/// the rest rather than comparing the whole mask.
+///
+/// This is a function and defines no struct, so it does not participate in
+/// [`SERVO_CAPI_ABI_VERSION`]: a payload too old to export it at all cannot be
+/// distinguished from one reporting no features, and an embedder that resolves it
+/// optionally should treat its absence as "unknown" rather than as "no features".
+#[unsafe(no_mangle)]
+pub extern "C" fn servo_capi_build_features() -> u64 {
+    #[allow(unused_mut)]
+    let mut features: u64 = 0;
+
+    #[cfg(feature = "multiprocess")]
+    {
+        features |= SERVO_CAPI_FEATURE_MULTIPROCESS;
+    }
+
+    features
+}
+
 /// An opaque struct representing builder for a `Servo` instance.
 /// Refer to the documentation of the corresponding
 /// [servo::ServoBuilder] struct in Rust API for more information.
@@ -336,5 +371,20 @@ mod tests {
         assert_eq!(size_of::<ServoWebViewDelegate>(), 128);
         assert_eq!(size_of::<ServoEmbedderController>(), 16);
         assert_eq!(size_of::<ServoEmbedderControl>(), 40);
+    }
+
+    /// The feature mask must say what this build actually is, in both arms: an
+    /// embedder refusing to run multiprocess on a single-process payload depends on
+    /// the bit being absent, and that is the arm a default build never exercises.
+    #[test]
+    fn build_features_match_this_build() {
+        let features = crate::servo_capi_build_features();
+        println!("build features = {features:#x}");
+
+        let multiprocess = features & crate::SERVO_CAPI_FEATURE_MULTIPROCESS != 0;
+        assert_eq!(multiprocess, cfg!(feature = "multiprocess"));
+
+        // No bit outside the defined set.
+        assert_eq!(features & !crate::SERVO_CAPI_FEATURE_MULTIPROCESS, 0);
     }
 }

@@ -13074,7 +13074,7 @@ dependencies = [
 
 [[package]]
 name = "zdr-capi-shim"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "dpi",
  "euclid",
