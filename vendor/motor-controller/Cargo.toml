@@ -1,6 +1,10 @@
 ﻿[package]
 name = "motor-controller"
 version = "0.1.0"
+# Not for crates.io: it is the seam this fork carries, and it path-depends on the
+# engine in this tree. Stated so that the `servo` dependency below can omit a
+# version requirement, which is the only thing publishing would need it for.
+publish = false
 edition = "2021"
 license = "MPL-2.0"
 description = "Engine-agnostic WebView abstraction seam for embedding a Servo backend (named for Servo's own motor metaphor). Reusable wrapper that keeps engine-embedding concerns out of an embedder's application crates."
@@ -30,7 +34,14 @@ servo-backend = ["dep:servo"]
 # everything off does NOT avoid SpiderMonkey - `script` is a non-optional
 # dependency of components/servo, so mozjs is required at every feature
 # combination. There is no SpiderMonkey-free libservo.
-servo = { path = "../../components/servo", version = "0.6.0", optional = true, default-features = false }
+# NO `version`: this is a path dependency on the engine in this same tree, and a
+# version requirement here only has to agree with whatever upstream's workspace
+# version happens to be. It was pinned to 0.6.0 and broke the moment an upstream
+# merge moved the workspace to 0.7.0 — this crate is its own workspace, so no
+# merge updates it, and the failure surfaces in CI rather than in the merge. The
+# path is the dependency; the number was never load-bearing. `publish = false`
+# above is what makes omitting it legal.
+servo = { path = "../../components/servo", optional = true, default-features = false }
 
 
 
