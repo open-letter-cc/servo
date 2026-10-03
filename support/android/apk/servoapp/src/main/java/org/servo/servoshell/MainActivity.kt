@@ -15,6 +15,10 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.component1
+import androidx.activity.result.component2
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,8 +39,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -44,6 +50,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.getSystemService
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
 import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.launch
@@ -55,12 +62,12 @@ class MainActivity : ComponentActivity(), Servo.Client {
     private lateinit var servoView: ServoView
 
     private val urlTextFieldState = TextFieldState()
-    private var isRefreshingState = mutableStateOf(false)
+    private var isRefreshing by mutableStateOf(false)
     private var mediaSession: MediaSession? = null
     private lateinit var historyManager: HistoryManager
     private var currentUrl = ""
     private var currentTitle = ""
-    private var alertMessageState = mutableStateOf<String?>(null)
+    private var alertMessage by mutableStateOf<String?>(null)
 
     private class Settings(preferences: SharedPreferences) {
         var experimental = preferences.getBoolean("experimental", false)
@@ -86,9 +93,22 @@ class MainActivity : ComponentActivity(), Servo.Client {
                 initialUri =
                     if (Intent.ACTION_VIEW == intent.action) intent.data.toString() else null,
                 navigator = navigator,
+                scope = lifecycleScope,
             )
 
         historyManager = HistoryManager(this)
+
+        val historyActivityResultLauncher =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+                (resultCode, data) ->
+                if (resultCode == RESULT_OK && data != null) {
+                    val url = data.getStringExtra("url")
+                    if (!url.isNullOrEmpty()) {
+                        urlTextFieldState.edit { replace(0, length, url) }
+                        navigator.navigate(urlTextFieldState.text.toString())
+                    }
+                }
+            }
 
         setContent {
             val isWindowWidthAtLeastMedium =
@@ -102,7 +122,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                         if (isWindowWidthAtLeastMedium) {
                             IconButton(
                                 onClick = { onHistoryBackMenuItemClicked(navigator) },
-                                enabled = navigator.canGoBackState.value,
+                                enabled = navigator.canGoBack,
                             ) {
                                 Icon(
                                     painterResource(R.drawable.arrow_back),
@@ -111,7 +131,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             }
                             IconButton(
                                 onClick = { onHistoryForwardMenuItemClicked(navigator) },
-                                enabled = navigator.canGoForwardState.value,
+                                enabled = navigator.canGoForward,
                             ) {
                                 Icon(
                                     painterResource(R.drawable.arrow_forward),
@@ -120,11 +140,11 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             }
                             IconButton(
                                 onClick = {
-                                    if (isRefreshingState.value) onCancelMenuItemClicked()
+                                    if (isRefreshing) onCancelMenuItemClicked()
                                     else onRefreshMenuItemClicked(navigator)
                                 }
                             ) {
-                                if (isRefreshingState.value) {
+                                if (isRefreshing) {
                                     Icon(
                                         painterResource(R.drawable.cancel),
                                         stringResource(R.string.cancel),
@@ -140,12 +160,12 @@ class MainActivity : ComponentActivity(), Servo.Client {
                         Omnibox(
                             urlTextFieldState,
                             onSearch = { search ->
-                                servoView.loadUri(search)
+                                navigator.navigate(search)
                                 servoView.requestFocus()
                             },
                             modifier = Modifier.weight(1f).padding(end = 10.dp),
                         )
-                        if (isRefreshingState.value) {
+                        if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.padding(end = 10.dp).size(20.dp)
                             )
@@ -157,7 +177,11 @@ class MainActivity : ComponentActivity(), Servo.Client {
                                     stringResource(R.string.options),
                                 )
                             }
-                            IconButton(onClick = ::onHistoryMenuItemClicked) {
+                            IconButton(
+                                onClick = {
+                                    onHistoryMenuItemClicked(historyActivityResultLauncher)
+                                }
+                            ) {
                                 Icon(
                                     painterResource(R.drawable.history),
                                     stringResource(R.string.history_title),
@@ -171,19 +195,19 @@ class MainActivity : ComponentActivity(), Servo.Client {
                         NavigationBar {
                             NavigationBarItem(
                                 selected = false,
-                                enabled = navigator.canGoBackState.value,
+                                enabled = navigator.canGoBack,
                                 onClick = { onHistoryBackMenuItemClicked(navigator) },
                                 icon = { Icon(painterResource(R.drawable.arrow_back), null) },
                                 label = { Text(stringResource(R.string.history_back)) },
                             )
                             NavigationBarItem(
                                 selected = false,
-                                enabled = navigator.canGoForwardState.value,
+                                enabled = navigator.canGoForward,
                                 onClick = { onHistoryForwardMenuItemClicked(navigator) },
                                 icon = { Icon(painterResource(R.drawable.arrow_forward), null) },
                                 label = { Text(stringResource(R.string.history_forward)) },
                             )
-                            if (isRefreshingState.value) {
+                            if (isRefreshing) {
                                 NavigationBarItem(
                                     selected = false,
                                     onClick = ::onCancelMenuItemClicked,
@@ -206,7 +230,9 @@ class MainActivity : ComponentActivity(), Servo.Client {
                             )
                             NavigationBarItem(
                                 selected = false,
-                                onClick = ::onHistoryMenuItemClicked,
+                                onClick = {
+                                    onHistoryMenuItemClicked(historyActivityResultLauncher)
+                                },
                                 icon = { Icon(painterResource(R.drawable.history), null) },
                                 label = { Text(stringResource(R.string.history_title)) },
                             )
@@ -218,12 +244,12 @@ class MainActivity : ComponentActivity(), Servo.Client {
                     servoView = servoView,
                     modifier = Modifier.padding(innerPadding),
                 )
-                BackHandler(enabled = navigator.canGoBackState.value) { navigator.back() }
-                alertMessageState.value?.let { alertMessage ->
+                BackHandler(enabled = navigator.canGoBack) { navigator.back() }
+                alertMessage?.let { alertMessage ->
                     AlertDialog(
-                        onDismissRequest = { alertMessageState.value = null },
+                        onDismissRequest = { this.alertMessage = null },
                         confirmButton = {
-                            TextButton(onClick = { alertMessageState.value = null }) {
+                            TextButton(onClick = { this.alertMessage = null }) {
                                 Text(stringResource(android.R.string.ok))
                             }
                         },
@@ -269,8 +295,10 @@ class MainActivity : ComponentActivity(), Servo.Client {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
-    private fun onHistoryMenuItemClicked() {
-        startActivityForResult(Intent(this, HistoryActivity::class.java), HISTORY_REQUEST_CODE)
+    private fun onHistoryMenuItemClicked(
+        historyActivityResultLauncher: ActivityResultLauncher<Intent>
+    ) {
+        historyActivityResultLauncher.launch(Intent(this, HistoryActivity::class.java))
     }
 
     override fun onImeShow() {
@@ -284,14 +312,14 @@ class MainActivity : ComponentActivity(), Servo.Client {
     }
 
     override fun onAlert(message: String) {
-        alertMessageState.value = message
+        alertMessage = message
     }
 
     override fun onLoadStarted() {
         // This doesn’t seem to actually happen when navigating
         // back to a page that is already cached.
         Log.i(TAG, "onLoadStarted: ")
-        isRefreshingState.value = true
+        isRefreshing = true
     }
 
     // INFO: This currently gets called multiple times on each load.
@@ -303,7 +331,7 @@ class MainActivity : ComponentActivity(), Servo.Client {
             // per page.
             historyManager.addEntry(currentUrl, currentTitle)
         }
-        isRefreshingState.value = false
+        isRefreshing = false
     }
 
     override fun onTitleChanged(title: String) {
@@ -322,18 +350,6 @@ class MainActivity : ComponentActivity(), Servo.Client {
             servoView.setExperimentalMode(updatedSettings.experimental)
         }
         settings = updatedSettings
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        if (requestCode == HISTORY_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
-            val url = data.getStringExtra("url")
-            if (!url.isNullOrEmpty()) {
-                urlTextFieldState.edit { replace(0, length, url) }
-                servoView.loadUri(urlTextFieldState.text.toString())
-            }
-        }
     }
 
     override fun onMediaSessionMetadata(title: String, artist: String, album: String) {
@@ -372,10 +388,6 @@ class MainActivity : ComponentActivity(), Servo.Client {
 
     companion object {
         private const val TAG = "MainActivity"
-
-        // Identify which activity a result came from, if we ever have more
-        // than one
-        private const val HISTORY_REQUEST_CODE = 1
     }
 }
 

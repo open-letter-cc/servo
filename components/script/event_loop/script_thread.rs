@@ -1951,6 +1951,9 @@ impl ScriptThread {
             ScriptThreadMessage::SetAccessibilityActive(pipeline_id, active, epoch) => {
                 self.set_accessibility_active(pipeline_id, active, epoch);
             },
+            ScriptThreadMessage::ForwardAccessibilityAction(pipeline_id, action_request) => {
+                self.forward_accessibility_action(pipeline_id, action_request);
+            },
             ScriptThreadMessage::TriggerGarbageCollection => unsafe {
                 JS_GC(cx, GCReason::API);
             },
@@ -2892,12 +2895,8 @@ impl ScriptThread {
 
         // This is separate from the next few lines in order to drop the borrow
         // on `document.iframes()`.
-        let iframe_element = browsing_context_id.and_then(|browsing_context_id| {
-            document
-                .iframes()
-                .get(browsing_context_id)
-                .map(|iframe| iframe.element.as_rooted())
-        });
+        let iframe_element = browsing_context_id
+            .and_then(|browsing_context_id| document.iframes().element(browsing_context_id));
 
         rooted!(&in(cx) let focusable_area = iframe_element
             .map(|iframe_element| FocusableArea::IFrameViewport {
@@ -3068,7 +3067,7 @@ impl ScriptThread {
         let Some(frame_element) = frame_element else {
             return;
         };
-        if !frame_element.update_pipeline_id(new_pipeline_id, reason, cx) {
+        if !frame_element.update_pipeline_id(cx, new_pipeline_id, reason) {
             return;
         };
 
@@ -3301,7 +3300,8 @@ impl ScriptThread {
         self.background_hang_monitor.unregister();
 
         // If we're in multiprocess mode, shut-down the IPC router for this process.
-        if opts::get().multiprocess || opts::get().force_ipc {
+        // If we are in single process but IPC mode there is only one ROUTER, so we should not shut it down.
+        if opts::get().multiprocess {
             debug!("Exiting IPC router thread in script thread.");
             ipc_channel::router::ROUTER.shutdown();
         }
@@ -3384,7 +3384,7 @@ impl ScriptThread {
             .borrow()
             .find_iframe(parent_id, browsing_context_id);
         match iframe {
-            Some(iframe) => iframe.iframe_load_event_steps(child_id, cx),
+            Some(iframe) => iframe.iframe_load_event_steps(cx, child_id),
             None => warn!("Message sent to closed pipeline {}.", parent_id),
         }
     }
@@ -3896,6 +3896,27 @@ impl ScriptThread {
             .set_accessibility_active(active, epoch);
     }
 
+    /// See the docs for [`ScriptThreadMessage::ForwardAccessibilityAction`].
+    fn forward_accessibility_action(
+        &self,
+        pipeline_id: PipelineId,
+        action_request: accesskit::ActionRequest,
+    ) {
+        if !(pref!(accessibility_enabled)) {
+            return;
+        }
+
+        let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
+            error!("Trying to forward accessibility action to stale document: {pipeline_id}");
+            return;
+        };
+
+        document
+            .window()
+            .layout()
+            .handle_accessibility_action(action_request);
+    }
+
     /// Handle a "navigate an iframe" message from the constellation.
     fn handle_navigate_iframe(
         &self,
@@ -3912,11 +3933,11 @@ impl ScriptThread {
             .find_iframe(parent_pipeline_id, browsing_context_id);
         if let Some(iframe) = iframe {
             iframe.navigate_or_reload_child_browsing_context(
+                cx,
                 load_data,
                 history_handling,
                 ProcessingMode::NotFirstTime,
                 target_snapshot_params,
-                cx,
             );
         }
     }

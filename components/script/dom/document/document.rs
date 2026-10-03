@@ -205,7 +205,7 @@ use crate::dom::resizeobserver::{ResizeObservationDepth, ResizeObserver};
 use crate::dom::sanitizer::Sanitizer;
 use crate::dom::selection::Selection;
 use crate::dom::servoparser::ServoParser;
-use crate::dom::shadowroot::ShadowRoot;
+use crate::dom::shadowroot::shadowroot::ShadowRoot;
 use crate::dom::storageevent::StorageEvent;
 use crate::dom::text::Text;
 use crate::dom::textevent::TextEvent;
@@ -445,7 +445,7 @@ pub(crate) struct Document {
     anchors: MutNullableDom<HTMLCollection>,
     applets: MutNullableDom<HTMLCollection>,
     /// Information about the `<iframes>` in this [`Document`].
-    iframes: RefCell<IFrameCollection>,
+    iframes: IFrameCollection,
     /// Shared locks used for style attributes, author-origin stylesheets, and user and
     /// user agent stylesheets in this document. Can be acquired once for accessing many
     /// objects. This is shared with the owning [`ScriptThread`].
@@ -1678,7 +1678,7 @@ impl Document {
         };
         for node in root
             .upcast::<Node>()
-            .traverse_preorder_non_rooting(no_gc, ShadowIncluding::Yes)
+            .traverse_preorder_unrooted(no_gc, ShadowIncluding::Yes)
         {
             node.dirty(no_gc, NodeDamage::Other)
         }
@@ -3061,14 +3061,8 @@ impl Document {
 
     /// A reference to the [`IFrameCollection`] of this [`Document`], holding information about
     /// `<iframe>`s found within it.
-    pub(crate) fn iframes(&self) -> Ref<'_, IFrameCollection> {
-        self.iframes.borrow()
-    }
-
-    /// A mutable reference to the [`IFrameCollection`] of this [`Document`], holding information about
-    /// `<iframe>`s found within it.
-    pub(crate) fn iframes_mut(&self) -> RefMut<'_, IFrameCollection> {
-        self.iframes.borrow_mut()
+    pub(crate) fn iframes(&self) -> &IFrameCollection {
+        &self.iframes
     }
 
     pub(crate) fn set_navigation_start(&self, navigation_start: CrossProcessInstant) {
@@ -3218,7 +3212,7 @@ impl Document {
         if !self.window().layout_blocked() &&
             (!self.restyle_reason(no_gc).is_empty() ||
                 self.window().layout().needs_new_display_list() ||
-                self.window().layout().force_accessibility_update())
+                self.window().layout().needs_accessibility_update())
         {
             return true;
         }
@@ -4085,7 +4079,7 @@ impl Document {
             scripts: Default::default(),
             anchors: Default::default(),
             applets: Default::default(),
-            iframes: RefCell::new(IFrameCollection::new()),
+            iframes: IFrameCollection::new(),
             shared_style_locks,
             stylesheets: DomRefCell::new(DocumentStylesheetSet::new()),
             stylesheet_list: MutNullableDom::new(None),
@@ -4529,7 +4523,7 @@ impl Document {
     ) -> Option<UnrootedDom<'a, Node>> {
         let doc = self.get_document_element_unrooted(no_gc)?;
         doc.upcast::<Node>()
-            .traverse_preorder_non_rooting(no_gc, ShadowIncluding::No)
+            .traverse_preorder_unrooted(no_gc, ShadowIncluding::No)
             .filter(|node| callback(node))
             .nth(index as usize)
     }
@@ -4986,7 +4980,7 @@ impl Document {
         no_gc: &NoGC,
         subtree_root: &Node,
     ) {
-        for node in subtree_root.traverse_preorder_non_rooting(no_gc, ShadowIncluding::Yes) {
+        for node in subtree_root.traverse_preorder_unrooted(no_gc, ShadowIncluding::Yes) {
             self.clean_up_style_and_layout_data_for_node(&node);
         }
     }
@@ -6222,7 +6216,7 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
         else if root.namespace() == &ns!(html) {
             let elem = root
                 .upcast::<Node>()
-                .traverse_preorder_non_rooting(cx.no_gc(), ShadowIncluding::No)
+                .traverse_preorder_unrooted(cx.no_gc(), ShadowIncluding::No)
                 .find(|node| node.is::<HTMLTitleElement>());
             match elem {
                 // Step 2. If the title element is non-null, let element be the title element.
@@ -6868,7 +6862,7 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
         // erase all event listeners and handlers given node.
         for node in self
             .upcast::<Node>()
-            .traverse_preorder_non_rooting(cx.no_gc(), ShadowIncluding::Yes)
+            .traverse_preorder_unrooted(cx.no_gc(), ShadowIncluding::Yes)
         {
             node.upcast::<EventTarget>().remove_all_listeners(cx);
         }

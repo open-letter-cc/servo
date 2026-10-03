@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicIsize;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use accesskit::{Action, ActionData, ActionRequest};
 use app_units::Au;
 use background_hang_monitor_api::BackgroundHangMonitorRegister;
 use bitflags::bitflags;
@@ -59,7 +60,7 @@ use servo_base::text::{RangeAny, Utf32CodeUnits, Utf32CodeUnitsOrNodeOffset};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style::Atom;
 use style::animation::DocumentAnimationSet;
-use style::attr::{AttrValue, parse_integer, parse_unsigned_integer};
+use style::attr::{AttrValue, parse_double};
 use style::context::QuirksMode;
 use style::data::ElementDataWrapper;
 use style::device::Device;
@@ -162,26 +163,30 @@ pub struct SVGElementData<'dom> {
     pub width: Option<&'dom AttrValue>,
     pub height: Option<&'dom AttrValue>,
     pub svg_id: Uuid,
+    /// <https://www.w3.org/TR/SVG11/coords.html#ViewBoxAttribute>
     pub view_box: Option<&'dom AttrValue>,
 }
 
 impl SVGElementData<'_> {
+    /// <https://www.w3.org/TR/SVG11/coords.html#ViewBoxAttribute>
     pub fn ratio_from_view_box(&self) -> Option<f32> {
-        let mut iter = self.view_box?.chars();
-        let _min_x = parse_integer(&mut iter).ok()?;
-        let _min_y = parse_integer(&mut iter).ok()?;
+        let mut iter = self
+            .view_box?
+            .split(|c| char_is_whitespace(c) || c == ',')
+            .filter(|part| !part.is_empty());
+        let _min_x = parse_double(iter.next()?).ok()?;
+        let _min_y = parse_double(iter.next()?).ok()?;
 
-        let width = parse_unsigned_integer(&mut iter).ok()?;
-        if width == 0 {
+        let width = parse_double(iter.next()?).ok()?;
+        if width == 0f64 {
             return None;
         }
 
-        let height = parse_unsigned_integer(&mut iter).ok()?;
-        if height == 0 {
+        let height = parse_double(iter.next()?).ok()?;
+        if height == 0f64 {
             return None;
         }
 
-        let mut iter = iter.skip_while(|c| char_is_whitespace(*c));
         iter.next().is_none().then(|| width as f32 / height as f32)
     }
 }
@@ -246,6 +251,13 @@ pub struct HTMLMediaData {
     pub current_frame: Option<MediaFrame>,
     pub metadata: Option<MediaMetadata>,
     pub poster_url: Option<ServoUrl>,
+}
+
+#[derive(Debug)]
+pub struct AccessibilityActionRequest {
+    pub action: Action,
+    pub target: OpaqueNode,
+    pub data: Option<ActionData>,
 }
 
 pub struct LayoutConfig {
@@ -421,12 +433,15 @@ pub trait Layout {
     /// - a page is loaded after accesibility is activated.
     ///
     /// Checked in can_skip_reflow_request_entirely(), as a dirty accessibility tree
-    /// should force a reflow, and handle_accessibility_tree_update() to determine whether to
-    /// update the accessibility tree during reflow.
-    fn force_accessibility_update(&self) -> bool;
+    /// should force a reflow, and handle_reflow() to determine whether to update the
+    /// accessibility tree during reflow.
+    fn needs_accessibility_update(&self) -> bool;
 
-    /// See [Self::force_accessibility_update()].
+    /// See [Self::needs_accessibility_update()].
     fn set_force_accessibility_update(&self);
+
+    /// Handle an accessibility action.
+    fn handle_accessibility_action(&self, action_request: ActionRequest);
 
     fn font_context(&self) -> &Arc<FontContext>;
 }
@@ -639,6 +654,8 @@ pub struct ReflowResult {
     pub changed_web_fonts: WebFontSetDifference,
     /// The LCP candidate during this layout pass, if any.
     pub lcp_candidate: Option<LCPCandidate>,
+    /// Actions which have been requested by assistive technology, if any.
+    pub pending_accessibility_actions: Vec<AccessibilityActionRequest>,
 }
 
 bitflags! {

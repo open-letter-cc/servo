@@ -47,6 +47,7 @@ dictionary TestDictionary {
   DOMString? nonRequiredNullable2;
   SimpleCallback noCallbackImport;
   callbackWithOnlyOneOptionalArg noCallbackImport2;
+  Promise<undefined> promiseValue;
 };
 
 dictionary TestDictionaryWithTypedArray {
@@ -611,7 +612,6 @@ interface TestBinding {
   TestDictionaryWithParent getDictionaryWithParent(DOMString parent, DOMString child);
   undefined getDictionaryWithTypedArray(optional TestDictionaryWithTypedArray dict = {});
 
-  undefined acceptUnionWithUnionSequence(optional (unrestricted double or DOMPointInit or sequence<(unrestricted double or DOMPointInit)>) something = 0);
   undefined defaultByte(optional byte value = 0);
   undefined defaultOctect(optional octet value = 0);
   undefined defaultShort(optional short value = 0);

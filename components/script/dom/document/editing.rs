@@ -7,31 +7,40 @@ use std::rc::Rc;
 
 use embedder_traits::{
     ClipboardAction, EditingAction, EditingDirection, EditingMotion, EmbedderMsg, InputEventResult,
-    ModifySelection,
+    ModifySelection, MouseButton,
 };
 use js::context::{JSContext, NoGC};
 use keyboard_types::{
     Key, KeyState, KeyboardEvent as KeyboardTypesEvent, Modifiers, NamedKey, ShortcutMatcher,
 };
+use layout_api::QueryMsg;
 use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
 use script_bindings::codegen::GenericBindings::EventBinding::EventMethods;
 use script_bindings::codegen::GenericBindings::SelectionBinding::SelectionMethods;
+use script_bindings::codegen::GenericBindings::UIEventBinding::UIEventMethods as _;
 use script_bindings::dom::UnrootedDom;
 use script_bindings::inheritance::Castable;
 use script_bindings::root::DomRoot;
 use script_bindings::str::DOMString;
 use servo_base::generic_channel::GenericCallback;
+use servo_base::text::Utf32CodeUnitsOrNodeOffset;
 
 use crate::dom::clipboardevent::ClipboardEventType;
 use crate::dom::event::{EventBubbles, EventCancelable};
 use crate::dom::execcommand::execcommands::DocumentExecCommandSupport;
+use crate::dom::inputevent::HitTestResult;
 use crate::dom::text_control::TextControlElement;
 use crate::dom::text_input::{InputEventType, IsComposing};
 use crate::dom::types::{
     ClipboardEvent, DataTransfer, Event, EventTarget, HTMLInputElement, HTMLTextAreaElement,
+    MouseEvent, UIEvent,
 };
 use crate::dom::{Document, Node, NodeTraits};
+use crate::drag::document_selection_drag::{
+    DocumentSelectionDragHandler, adjust_anchor_for_user_select,
+};
 use crate::drag::drag_data_store::{DragDataStore, Kind, Mode};
+use crate::drag::drag_gesture::{DragGesture, DragHandler};
 
 #[cfg(target_os = "macos")]
 pub(crate) const CMD_OR_CONTROL: Modifiers = Modifiers::META;
@@ -42,6 +51,45 @@ pub(crate) const CMD_OR_CONTROL: Modifiers = Modifiers::CONTROL;
 pub(crate) const ALT_OR_CONTROL: Modifiers = Modifiers::ALT;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const ALT_OR_CONTROL: Modifiers = Modifiers::CONTROL;
+
+/// A selection granularity to use when selecting via mouse button events.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SelectionGranularity {
+    /// Select a single selection focus node position. This is created via single primary click
+    /// or middle clicks.
+    Position,
+    /// Select a word at the target point. This is created via double primary clicks.
+    Word,
+    /// Select to the paragraph boundaries or to a hard line break, whatever comes first.
+    /// This is triggered via triple primary clicks.
+    LineIgnoringSoftWrap,
+}
+
+impl SelectionGranularity {
+    pub(crate) fn from_mouse_event(mouse_event: &MouseEvent) -> Option<Self> {
+        match mouse_event.button() {
+            MouseButton::Primary => {}, // continue below
+            MouseButton::Auxiliary => return Some(Self::Position),
+            _ => return None,
+        }
+
+        // We currently don't do anything for higher click counts, but some platforms do.
+        // For example on desktop linux, 4+ click cycle back starting at same as single click:
+        // ```
+        // const MAX_CLICKS: i32 = 3;
+        // let click_count = (click_count - 1) % MAX_CLICKS + 1;
+        // ```
+        // We should re-examine this when implementing support for platform-specific editing
+        // behaviors.
+        let click_count = mouse_event.upcast::<UIEvent>().Detail();
+        match click_count {
+            1 => Some(Self::Position),
+            2 => Some(Self::Word),
+            3 => Some(Self::LineIgnoringSoftWrap),
+            _ => None,
+        }
+    }
+}
 
 impl Document {
     pub(crate) fn editing_context(&self, no_gc: &NoGC, node: &Node) -> EditingContext {
@@ -94,7 +142,7 @@ impl Document {
         if !event.DefaultPrevented() {
             // Step 3. If the event was not canceled, then
             match clipboard_event.clipboard_event_type() {
-                ClipboardEventType::Copy => {
+                ClipboardEventType::Copy if editing_context.copying_enabled() => {
                     // Step 3.1. Copy the selected contents, if any, to the clipboard.
                     // Implementations should create alternate text/html and text/plain
                     // clipboard formats when content in a web page is selected.
@@ -112,7 +160,7 @@ impl Document {
                 },
                 ClipboardEventType::Cut => {
                     if let Some(selection) = editing_context.selection_content(cx) &&
-                        editing_context.cutting_and_pasting_enabled()
+                        editing_context.cutting_enabled()
                     {
                         // Step 3.1. If there is a selection in an editable context where
                         // cutting is enabled, then
@@ -142,7 +190,7 @@ impl Document {
                 },
                 ClipboardEventType::Paste => {
                     if editing_context.has_selection_or_cursor() &&
-                        editing_context.cutting_and_pasting_enabled() &&
+                        editing_context.pasting_enabled() &&
                         let Some(text_content) = clipboard_event.text_content()
                     {
                         // Step 3.1. If there is a selection or cursor in an editable context
@@ -382,6 +430,53 @@ impl Document {
 
         self.exec_command_for_command_id(cx, command, argument)
     }
+
+    fn handle_mousedown_event(
+        &self,
+        cx: &mut JSContext,
+        mouse_event: &MouseEvent,
+        hit_test_result: &HitTestResult,
+    ) {
+        assert_eq!(mouse_event.upcast::<Event>().type_(), atom!("mousedown"));
+
+        let Some(selection) = self.GetSelection(cx) else {
+            return;
+        };
+
+        if mouse_event.button() == MouseButton::Auxiliary {
+            let _ = selection.Collapse(cx, None, 0);
+            mouse_event.upcast::<Event>().mark_as_handled();
+            return;
+        }
+
+        if mouse_event.button() != MouseButton::Primary {
+            return;
+        }
+
+        // TODO: handle double/triple click:
+        // match SelectionTarget::from_mouse_event(mouse_event) {…}
+
+        // When the hit test cannot find a suitable DOM position for selection, just
+        // use the first offset within the target node of the `mousedown` event. This
+        // is a reasonable place to start the selection from.
+        let (container, offset) = hit_test_result
+            .dom_position_for_selection
+            .as_ref()
+            .map(|(node, offset)| (node, *offset))
+            .unwrap_or((&hit_test_result.node, Utf32CodeUnitsOrNodeOffset(0)));
+        let Some((container, offset, user_select_contain_node)) =
+            adjust_anchor_for_user_select(cx, container.clone(), offset)
+        else {
+            return;
+        };
+        selection.collapse_to_dom_position(cx, &container, offset);
+        self.event_handler().install_drag_gesture(DragGesture::new(
+            DragHandler::DocumentSelection(DocumentSelectionDragHandler::new(
+                user_select_contain_node.as_deref(),
+            )),
+        ));
+        mouse_event.upcast::<Event>().mark_as_handled();
+    }
 }
 
 pub(crate) enum TextControlElementEditingContext {
@@ -394,6 +489,18 @@ impl TextControlElementEditingContext {
         match self {
             TextControlElementEditingContext::TextArea(text_area) => &**text_area,
             TextControlElementEditingContext::Input(input) => &**input,
+        }
+    }
+
+    fn handle_mousedown_event(&self, mouse_event: &MouseEvent, hit_test_result: &HitTestResult) {
+        let text_control = self.text_control_element();
+        if text_control.text_input_mut().handle_mousedown_event(
+            text_control.as_element(),
+            mouse_event,
+            hit_test_result,
+        ) {
+            text_control.maybe_update_shared_selection();
+            mouse_event.upcast::<Event>().mark_as_handled();
         }
     }
 }
@@ -490,7 +597,22 @@ impl EditingContext {
         }
     }
 
-    pub(crate) fn cutting_and_pasting_enabled(&self) -> bool {
+    pub(crate) fn copying_enabled(&self) -> bool {
+        match self {
+            EditingContext::TextControl(element) => {
+                !element.text_control_element().is_password_field()
+            },
+            EditingContext::Document(..) => true,
+        }
+    }
+
+    pub(crate) fn cutting_enabled(&self) -> bool {
+        // `pasting_enabled` ensures that the editable content can be modified, which is necessary
+        // for cutting text.
+        self.copying_enabled() && self.pasting_enabled()
+    }
+
+    pub(crate) fn pasting_enabled(&self) -> bool {
         match self {
             EditingContext::TextControl(element) => {
                 !element.text_control_element().read_only_or_disabled()
@@ -573,6 +695,17 @@ impl EditingContext {
     }
 
     pub(crate) fn perform_editing_action(&self, cx: &mut JSContext, action: EditingAction) -> bool {
+        if let Some(node) = self.event_target().downcast::<Node>() {
+            // A previous event listener, such as keydown or beforeinput, might have
+            // hidden the event target. So we should re-check the layout and see if
+            // the node is still being rendered before performing an editing action
+            // on it.
+            node.owner_window().layout_reflow(QueryMsg::StyleQuery);
+            if !node.is_being_rendered_or_delegates_rendering(None) {
+                return false;
+            }
+        }
+
         // A couple editing actions can be performed via the external interface of
         // `EditingContext`. If that's the case we want to do that so that the same
         // code path is used regardless of how the action was executed.
@@ -593,6 +726,22 @@ impl EditingContext {
                 .text_control_element()
                 .perform_editing_action(cx, action),
             EditingContext::Document(document) => document.perform_editing_action(cx, &action),
+        }
+    }
+
+    pub(crate) fn handle_mousedown_event(
+        &self,
+        cx: &mut JSContext,
+        mouse_event: &MouseEvent,
+        hit_test_result: &HitTestResult,
+    ) {
+        match self {
+            EditingContext::TextControl(element) => {
+                element.handle_mousedown_event(mouse_event, hit_test_result)
+            },
+            EditingContext::Document(document) => {
+                document.handle_mousedown_event(cx, mouse_event, hit_test_result)
+            },
         }
     }
 }

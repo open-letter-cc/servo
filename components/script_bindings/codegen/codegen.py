@@ -885,9 +885,12 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
         return templateBody
 
     # A helper function for types that implement FromJSValConvertible trait
-    def fromJSValTemplate(config: str, errorHandler: str, exceptionCode: str) -> str:
-        return f"""match FromJSValConvertible::from_jsval(cx, ${{val}}, {config}) {{
-    Ok(ConversionResult::Success(value)) => value,
+    def fromJSValTemplate(config: str, errorHandler: str, exceptionCode: str, type_name: str = "FromJSValConvertible",
+                          needsToBeTraced: bool = False) -> str:
+        returnValue = "value.to_traced()" if needsToBeTraced else "value"
+
+        return f"""match {type_name}::from_jsval(cx, ${{val}}, {config}) {{
+    Ok(ConversionResult::Success(value)) => {returnValue},
     Ok(ConversionResult::Failure(error)) => {{
         {errorHandler}
     }}
@@ -991,10 +994,14 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
         #    once again be providing a Promise to signal completion of an
         #    operation, which would then not be exposed to anyone other than
         #    our own implementation code.
-        templateBody = fromJSValTemplate("()", failOrPropagate, exceptionCode)
+
+        needsToBeTraced = isMember == "Dictionary"
+        templateBody = fromJSValTemplate("()", failOrPropagate, exceptionCode, "<<D::Promise as PromiseHelpers<D>>::StackRoot>", needsToBeTraced)
 
         if isArgument:
             declType = CGGeneric("&D::Promise")
+        elif needsToBeTraced:
+            declType = CGGeneric("<D::Promise as PromiseHelpers<D>>::HeapTraced")
         else:
             declType = CGGeneric("<D::Promise as PromiseHelpers<D>>::StackRoot")
         return handleOptional(templateBody, declType, handleDefault("None"))
@@ -1006,11 +1013,8 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
 
         if descriptor.interface.isCallback():
             name = descriptor.nativeType
-            pre = "Rc" if descriptor.useRcCallback else "RootedCallback"
-            declType = CGWrapper(CGGeneric(f"{name}<D>"), pre=f"{pre}<", post=">")
+            declType = CGWrapper(CGGeneric(f"{name}<D>"), pre="RootedCallback<", post=">")
             template = f"{name}::new(cx, ${{val}}.get().to_object())"
-            if not descriptor.useRcCallback:
-                template = f"RootedCallback::from({template})"
             if type.nullable():
                 declType = CGWrapper(declType, pre="Option<", post=">")
                 template = wrapObjectTemplate(f"Some({template})", "None",
@@ -1219,17 +1223,14 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
         # pyrefly: ignore  # missing-attribute
         callback = type.unroll().callback
         declType = CGGeneric(f"{callback.identifier.name}<D>")
-        useRc = descriptorProvider.callbackUsesRc(callback.identifier.name)
         needTraced = isMember == "Dictionary"
-        if useRc:
-            typeName = "Rc"
-        elif needTraced:
+        if needTraced:
             typeName = "TracedCallback"
         else:
             typeName = "RootedCallback"
         finalDeclType = CGTemplatedType(typeName, declType)
 
-        conversion = CGCallbackTempRoot(declType.define(), useRc, needTraced)
+        conversion = CGCallbackTempRoot(declType.define(), needTraced)
 
         if type.nullable():
             declType = CGTemplatedType("Option", declType)
@@ -1281,10 +1282,10 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
                 raise TypeError("Can't handle non-null, non-undefined default value here")
 
             if not isAutoRooted:
-                templateBody = f"RootedTraceableBox::from_box(Heap::boxed({templateBody}))"
+                templateBody = f"Heap::boxed({templateBody})"
                 if default is not None:
-                    default = f"RootedTraceableBox::from_box(Heap::boxed({default}))"
-                declType = CGGeneric("RootedTraceableBox<Heap<JSVal>>")
+                    default = f"Heap::boxed({default})"
+                declType = CGGeneric("Box<Heap<JSVal>>")
             # AutoRooter can trace properly inner raw GC thing pointers
             else:
                 declType = CGGeneric("JSVal")
@@ -1310,7 +1311,11 @@ def getJSToNativeConversionInfo(type: IDLType, descriptorProvider: DescriptorPro
         templateBody = "${val}.get().to_object()"
         default = "ptr::null_mut()"
 
-        if isMember in ("Dictionary", "Union", "Sequence") and not isAutoRooted:
+        if isMember == "Dictionary":
+            templateBody = f"Heap::boxed({templateBody})"
+            default = "Box::new(Heap::default())"
+            declType = CGGeneric("Box<Heap<*mut JSObject>>")
+        elif isMember in ("Union", "Sequence") and not isAutoRooted:
             templateBody = f"RootedTraceableBox::from_box(Heap::boxed({templateBody}))"
             default = "RootedTraceableBox::new(Heap::default())"
             declType = CGGeneric("RootedTraceableBox<Heap<*mut JSObject>>")
@@ -1680,8 +1685,7 @@ def getRetvalDeclarationForType(returnType: IDLType | None, descriptorProvider: 
     if returnType.isCallback():
         # pyrefly: ignore  # missing-attribute
         callback = returnType.unroll().callback
-        typeName = "Rc" if descriptorProvider.callbackUsesRc(callback.identifier.name) else "RootedCallback"
-        result = CGGeneric(f'{typeName}<{getModuleFromObject(callback)}::{callback.identifier.name}<D>>')
+        result = CGGeneric(f'RootedCallback<{getModuleFromObject(callback)}::{callback.identifier.name}<D>>')
         if returnType.nullable():
             result = CGWrapper(result, pre="Option<", post=">")
         return result
@@ -2167,7 +2171,7 @@ class AttrDefiner(PropertyDefiner):
             {
                 "name": name,
                 "attr": m,
-                "flags": "JSPROP_ENUMERATE",
+                "flags": "0" if crossorigin else "JSPROP_ENUMERATE",
                 "kind": "JSPropertySpec_Kind::NativeAccessor",
             }
             for m in descriptor.interface.members if
@@ -2886,16 +2890,10 @@ class CGGeneric(CGThing):
 
 
 class CGCallbackTempRoot(CGGeneric):
-    def __init__(self, name: str, useRc: bool, needTraced: bool) -> None:
-        inner = CGGeneric(f"unsafe {{ {name.replace('<D>', '::<D>')}::new(cx, ${{val}}.get().to_object()) }}")
-        pre = "RootedCallback::from(" if not useRc else ""
-        if not useRc:
-            post = ")"
-            if needTraced:
-                post += ".to_traced()"
-        else:
-            post = ""
-        CGGeneric.__init__(self, CGWrapper(inner, pre, post).define())
+    def __init__(self, name: str, needTraced: bool) -> None:
+        extra = ".to_traced()" if needTraced else ""
+        inner = f"unsafe {{ {name.replace('<D>', '::<D>')}::new(cx, ${{val}}.get().to_object()) }}{extra}"
+        CGGeneric.__init__(self, inner)
 
 
 def getAllTypes(
@@ -3535,6 +3533,9 @@ class CGIDLInterface(CGThing):
         fn derives(class: &'static DOMClass) -> bool {{
             {check}
         }}
+
+        const PROTO_ID: PrototypeList::ID = PrototypeList::ID::{name};
+
         const PROTO_FIRST: u16 = {proto_first};
         const PROTO_LAST: u16 = {proto_last};
     }}
@@ -3546,6 +3547,8 @@ impl IDLInterface for {name} {{
     fn derives(class: &'static DOMClass) -> bool {{
         {check}
     }}
+    const PROTO_ID: PrototypeList::ID = PrototypeList::ID::{name};
+
     const PROTO_FIRST: u16 = {proto_first};
     const PROTO_LAST: u16 = {proto_last};
 }}
@@ -5649,7 +5652,7 @@ impl{self.generic} Clone for {self.type}{self.genericSuffix} {{
             if type_needs_tracing(t):
                 return "RootedTraceableBox"
             if t.isCallback():
-                return "Rc" if self.descriptorProvider.callbackUsesRc(t.name) else "RootedCallback"
+                return "RootedCallback"
             return ""
 
         assert self.type.flatMemberTypes is not None
@@ -5869,8 +5872,7 @@ class CGUnionConversionStruct(CGThing):
         if type_needs_tracing(t):
             actualType = f"RootedTraceableBox<{actualType}>"
         if t.isCallback():
-            typeName = "Rc" if self.descriptorProvider.callbackUsesRc(t.name) else "RootedCallback"
-            actualType = f"{typeName}<{actualType}>"
+            actualType = f"RootedCallback<{actualType}>"
         returnType = f"Result<Option<{actualType}>, ()>"
         jsConversion = templateVars["jsConversion"]
 
@@ -6023,7 +6025,7 @@ class ClassConstructor(ClassItem):
 
     body contains a string with the code for the constructor, defaults to empty.
     """
-    def __init__(self, args: list[Argument], useRc: bool, inline: bool = False, bodyInHeader: bool = False,
+    def __init__(self, args: list[Argument], inline: bool = False, bodyInHeader: bool = False,
                  visibility: str = "priv", explicit: bool = False, baseConstructors: list[str] | None = None,
                  body: str = "") -> None:
         self.args = args
@@ -6032,7 +6034,6 @@ class ClassConstructor(ClassItem):
         self.explicit = explicit
         self.baseConstructors = baseConstructors or []
         self.body = body
-        self.useRc = useRc
         ClassItem.__init__(self, None, visibility)
 
     def getDecorators(self, declaring: bool) -> str:
@@ -6063,15 +6064,8 @@ class ClassConstructor(ClassItem):
         joinedInitializers = '\n'.join(initializers)
         return (
             f"{self.body}"
-            f"let mut ret = Rc::new({cgClass.name} {{\n"
-            f"{joinedInitializers}\n"
-            "});\n"
-            "// Note: callback cannot be moved after calling init.\n"
-            "match Rc::get_mut(&mut ret) {\n"
-            f"    Some(ref mut callback) => callback.parent.init({self.args[0].name}, {self.args[1].name}),\n"
-            "    None => unreachable!(),\n"
-            "};\n"
-            "ret"
+            f"let obj = {cgClass.name} {{ {joinedInitializers} }};\n"
+            f"create_callback_rooted({self.args[0].name}, obj, {self.args[1].name})\n"
         )
 
     def declare(self, cgClass: CGClass) -> str:
@@ -6084,7 +6078,7 @@ class ClassConstructor(ClassItem):
 
         name = cgClass.getNameString().replace(': DomTypes', '')
         return f"""
-pub unsafe fn {self.getDecorators(True)}new({args}) -> Rc<{name}>{body}
+pub unsafe fn {self.getDecorators(True)}new({args}) -> RootedCallback<{name}>{body}
 """
 
     def define(self, cgClass: CGClass) -> str:
@@ -8374,7 +8368,7 @@ def type_needs_tracing(t: IDLObject, isMember: Optional[str] = None) -> bool:
         if is_typed_array(t):
             return True
 
-        if t.isCallback():
+        if t.isCallback() or t.isPromise():
             return isMember == "Dictionary"
 
         return False
@@ -8552,7 +8546,6 @@ class CGCallback(CGClass):
         self.baseName = baseName
         self._deps = idlObject.getDeps()
         name = idlObject.identifier.name
-        self.useRc = descriptorProvider.callbackUsesRc(name)
         # For our public methods that needThisHandling we want most of the
         # same args and the same return type as what CallbackMember
         # generates.  So we want to take advantage of all its
@@ -8577,12 +8570,11 @@ class CGCallback(CGClass):
     def getConstructors(self) -> list[ClassConstructor]:
         return [ClassConstructor(
             [Argument("&JSContext", "cx"), Argument("*mut JSObject", "aCallback")],
-            useRc=self.useRc,
             bodyInHeader=True,
             visibility="pub",
             explicit=False,
             baseConstructors=[
-                f"{self.baseName.replace('<D>', '')}::new()"
+                f"{self.baseName.replace('<D>', '')}::new_with_exterior_root()"
             ])]
 
     def getMethodImpls(self, method: CallbackMethod) -> list[ClassMethod]:
@@ -8669,14 +8661,28 @@ class CGCallbackFunction(CGCallback):
 class CGCallbackFunctionImpl(CGGeneric):
     def __init__(self, callback: IDLCallback | IDLInterface) -> None:
         type = f"{callback.identifier.name}<D>"
-        impl = (f"""
-impl<D: DomTypes> CallbackContainer<D> for {type} {{
-    unsafe fn new(cx: &JSContext, callback: *mut JSObject) -> Rc<{type}> {{
-        {type.replace('<D>', '')}::new(cx, callback)
-    }}
 
+        impl = (f"""
+impl<'a, D: DomTypes> From<&'a CallbackObject<D>> for {type} {{
+    fn from(base: &'a CallbackObject<D>) -> Self {{
+        Self {{ parent: base.into() }}
+    }}
+}}
+
+impl<D: DomTypes> HasCallbackHolder for {type} {{
+    type D = D;
     fn callback_holder(&self) -> &CallbackObject<D> {{
         self.parent.callback_holder()
+    }}
+
+    fn callback_holder_mut(&mut self) -> &mut CallbackObject<D> {{
+        self.parent.callback_holder_mut()
+    }}
+}}
+
+impl<D: DomTypes> CallbackContainer for {type} {{
+    unsafe fn new(cx: &JSContext, callback: *mut JSObject) -> RootedCallback<{type}> {{
+        {type.replace('<D>', '')}::new(cx, callback)
     }}
 }}
 
@@ -9288,17 +9294,18 @@ class GlobalGenRoots():
             CGGeneric(f"pub const PROTO_OR_IFACE_LENGTH: usize = {len(protos) + len(constructors)};\n"),
             CGGeneric(f"pub const MAX_PROTO_CHAIN_LENGTH: usize = {config.maxProtoChainLength};\n\n"),
             CGGeneric("#[allow(clippy::enum_variant_names, dead_code)]"),
-            CGNonNamespacedEnum('ID', protos, 0, deriving="strum::IntoStaticStr, PartialEq, Copy, Clone", repr="u16"),
+            CGNonNamespacedEnum('ID', protos, 0, deriving="strum::VariantArray, strum::VariantNames, strum::IntoStaticStr, Debug, PartialEq, Copy, Clone", repr="u16"),
             CGNonNamespacedEnum('Constructor', constructors, len(protos),
                                 deriving="PartialEq, Copy, Clone", repr="u16"),
-            CGWrapper(CGIndenter(CGList([CGGeneric(f'"{name}"') for name in protos],
-                                        ",\n"),
-                                 indentLevel=4),
-                      pre=f"static INTERFACES: [&str; {len(protos)}] = [\n",
-                      post="\n];\n\n"),
-            CGGeneric("pub fn proto_id_to_name(proto_id: u16) -> &'static str {\n"
+            CGGeneric("pub const fn proto_id_to_id(proto_id: u16) -> ID {\n"
+                                  "    use strum::VariantArray;"
+                                  "    debug_assert!(proto_id < ID::Last as u16);\n"
+                                  "    ID::VARIANTS[proto_id as usize]\n"
+                                  "}\n\n"),
+            CGGeneric("pub const fn proto_id_to_name(proto_id: u16) -> &'static str {\n"
+                      "    use strum::VariantNames;"
                       "    debug_assert!(proto_id < ID::Last as u16);\n"
-                      "    INTERFACES[proto_id as usize]\n"
+                      "    ID::VARIANTS[proto_id as usize]\n"
                       "}\n\n"),
         ])
 

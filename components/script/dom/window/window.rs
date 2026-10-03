@@ -15,6 +15,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use accesskit::Action;
 use app_units::Au;
 use base64::Engine;
 use content_security_policy::Violation;
@@ -47,11 +48,11 @@ use js::rust::{
     CustomAutoRooterGuard, HandleObject, HandleValue, MutableHandleObject, MutableHandleValue,
 };
 use layout_api::{
-    AxesOverflow, BoxAreaType, CSSPixelRectVec, FragmentType, HitTestFlags, LCPCandidate, Layout,
-    LayoutImageDestination, PendingImage, PendingImageState, PendingRasterizationImage,
-    PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest, ReflowRequestRestyle,
-    ReflowStatistics, RestyleReason, ScrollContainerQueryFlags, ScrollContainerResponse,
-    TrustedNodeAddress, combine_id_with_fragment_type,
+    AccessibilityActionRequest, AxesOverflow, BoxAreaType, CSSPixelRectVec, FragmentType,
+    HitTestFlags, LCPCandidate, Layout, LayoutImageDestination, PendingImage, PendingImageState,
+    PendingRasterizationImage, PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest,
+    ReflowRequestRestyle, ReflowStatistics, RestyleReason, ScrollContainerQueryFlags,
+    ScrollContainerResponse, TrustedNodeAddress, combine_id_with_fragment_type,
 };
 use malloc_size_of::MallocSizeOf;
 use media::WindowGLContext;
@@ -68,7 +69,6 @@ use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use profile_traits::time::ProfilerChan as TimeProfilerChan;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use script_bindings::cell::{DomRefCell, Ref};
-use script_bindings::codegen::GenericBindings::WindowBinding::ScrollToOptions;
 use script_bindings::dom::UnrootedDom;
 use script_bindings::interfaces::{HasOrigin, WindowHelpers};
 use script_bindings::like::Setlike;
@@ -125,7 +125,8 @@ use crate::dom::bindings::codegen::Bindings::ReportingObserverBinding::Report;
 use crate::dom::bindings::codegen::Bindings::RequestBinding::{RequestInfo, RequestInit};
 use crate::dom::bindings::codegen::Bindings::VoidFunctionBinding::VoidFunction;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::{
-    self, DeferredRequestInit, ScrollBehavior, WindowMethods, WindowPostMessageOptions,
+    self, DeferredRequestInit, ScrollBehavior, ScrollToOptions, WindowMethods,
+    WindowPostMessageOptions,
 };
 use crate::dom::bindings::codegen::UnionTypes::{
     RequestOrUSVString, TrustedScriptOrString, TrustedScriptOrStringOrFunction,
@@ -179,7 +180,7 @@ use crate::dom::reporting::reportingendpoint::{ReportingEndpoint, SendReportsToE
 use crate::dom::reporting::reportingobserver::ReportingObserver;
 use crate::dom::selection::Selection;
 use crate::dom::serviceworker::cachestorage::CacheStorage;
-use crate::dom::shadowroot::ShadowRoot;
+use crate::dom::shadowroot::shadowroot::ShadowRoot;
 use crate::dom::storage::Storage;
 #[cfg(feature = "bluetooth")]
 use crate::dom::testrunner::TestRunner;
@@ -1775,7 +1776,7 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
 
     /// <https://html.spec.whatwg.org/multipage/#accessing-other-browsing-contexts>
     fn Length(&self) -> u32 {
-        self.Document().iframes().iter().count() as u32
+        self.Document().iframes().active_iframe_count() as u32
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-parent>
@@ -2752,6 +2753,8 @@ impl Window {
             return Default::default();
         };
 
+        self.handle_accessibility_actions(reflow_result.pending_accessibility_actions, cx);
+
         debug!("script: layout complete");
         if let Some(marker) = marker {
             self.emit_timeline_marker(marker.end());
@@ -2772,7 +2775,7 @@ impl Window {
 
         if let Some(iframe_sizes) = reflow_result.iframe_sizes {
             document
-                .iframes_mut()
+                .iframes()
                 .handle_new_iframe_sizes_after_layout(cx, self, iframe_sizes);
         }
 
@@ -3155,8 +3158,7 @@ impl Window {
         self.layout_reflow(QueryMsg::InnerWindowDimensionsQuery);
         self.Document()
             .iframes()
-            .get(browsing_context_id)
-            .and_then(|iframe| iframe.size)
+            .viewport_details(browsing_context_id)
     }
 
     #[expect(unsafe_code)]
@@ -3823,6 +3825,21 @@ impl Window {
             let svg = node.downcast::<SVGSVGElement>().unwrap();
             svg.serialize_and_cache_subtree(cx);
             node.dirty(cx.no_gc(), NodeDamage::Other);
+        }
+    }
+
+    #[expect(unsafe_code)]
+    fn handle_accessibility_actions(
+        &self,
+        actions: Vec<AccessibilityActionRequest>,
+        cx: &mut JSContext,
+    ) {
+        for action_request in actions {
+            let target_opaque = action_request.target;
+            let target = unsafe { from_untrusted_node_address(target_opaque.into()) };
+            if action_request.action == Action::Click {
+                target.fire_synthetic_pointer_event_not_trusted(cx, atom!("click"));
+            }
         }
     }
 

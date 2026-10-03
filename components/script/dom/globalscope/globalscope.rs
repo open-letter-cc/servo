@@ -2574,8 +2574,6 @@ impl GlobalScope {
         introduction_type: Option<&'static CStr>,
         rval: Option<MutableHandleValue>,
     ) -> Result<(), JavaScriptEvaluationError> {
-        assert!(self.can_run_script());
-
         run_a_script::<DomTypeHolder, _, _>(cx, self, |cx| {
             let url = self.api_base_url();
             let fetch_options = ScriptFetchOptions::default_classic_script();
@@ -3032,11 +3030,14 @@ impl GlobalScope {
         };
     }
 
-    pub(crate) fn get_byte_length_queuing_strategy_size(&self) -> Option<RootedCallback<Function>> {
+    pub(crate) fn get_byte_length_queuing_strategy_size(
+        &self,
+        cx: &JSContext,
+    ) -> Option<RootedCallback<Function>> {
         self.byte_length_queuing_strategy_size_function
             .get()
             .cloned()
-            .map(|f| f.root())
+            .map(|f| f.root(cx))
     }
 
     pub(crate) fn set_count_queuing_strategy_size(&self, function: RootedCallback<Function>) {
@@ -3049,11 +3050,14 @@ impl GlobalScope {
         };
     }
 
-    pub(crate) fn get_count_queuing_strategy_size(&self) -> Option<RootedCallback<Function>> {
+    pub(crate) fn get_count_queuing_strategy_size(
+        &self,
+        cx: &JSContext,
+    ) -> Option<RootedCallback<Function>> {
         self.count_queuing_strategy_size_function
             .get()
             .cloned()
-            .map(|f| f.root())
+            .map(|f| f.root(cx))
     }
 
     pub(crate) fn add_notification_permission_request_callback(

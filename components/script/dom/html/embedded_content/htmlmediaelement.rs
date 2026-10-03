@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-#![cfg_attr(crown, allow(crown::jscontext_first_arg))]
-
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -99,6 +97,9 @@ use crate::dom::node::virtualmethods::VirtualMethods;
 use crate::dom::node::{Node, NodeDamage, NodeTraits, UnbindContext};
 use crate::dom::performance::performanceresourcetiming::InitiatorType;
 use crate::dom::promise::Promise;
+use crate::dom::rules_for_rendering::{
+    RulesForUpdatingTheTextTrackRendering, ShouldResetRenderingControls,
+};
 use crate::dom::texttrack::TextTrack;
 use crate::dom::texttrackcue::TextTrackCue;
 use crate::dom::texttracklist::TextTrackList;
@@ -777,7 +778,7 @@ impl HTMLMediaElement {
     /// we pass true to that method again.
     ///
     /// <https://html.spec.whatwg.org/multipage/#delaying-the-load-event-flag>
-    pub(crate) fn delay_load_event(&self, delay: bool, cx: &mut JSContext) {
+    fn delay_load_event(&self, cx: &mut JSContext, delay: bool) {
         let blocker = &self.delaying_the_load_event_flag;
 
         if delay {
@@ -795,6 +796,7 @@ impl HTMLMediaElement {
     fn current_and_other_cues<'no_gc>(
         &self,
         no_gc: &'no_gc NoGC,
+        text_tracks_list: &TextTrackList,
     ) -> Option<(
         Vec<UnrootedDom<'no_gc, TextTrackCue>>,
         Vec<UnrootedDom<'no_gc, TextTrackCue>>,
@@ -808,7 +810,6 @@ impl HTMLMediaElement {
         // all the cues of hidden and showing text tracks of the media element
         // that are not present in current cues.
         let current_playback_position = self.current_playback_position.get();
-        let text_tracks_list = self.text_tracks_list.get()?;
         Some(
             text_tracks_list
                 .iter(no_gc)
@@ -833,7 +834,12 @@ impl HTMLMediaElement {
         // Step 2. Let other cues be a list of cues, initialized to contain
         // all the cues of hidden and showing text tracks of the media element
         // that are not present in current cues.
-        let Some((current_cues, other_cues)) = self.current_and_other_cues(cx.no_gc()) else {
+        let Some(text_tracks_list) = self.text_tracks_list.get() else {
+            return;
+        };
+        let Some((current_cues, other_cues)) =
+            self.current_and_other_cues(cx.no_gc(), &text_tracks_list)
+        else {
             return;
         };
         // Step 3. Let last time be the current playback position at the time
@@ -929,6 +935,7 @@ impl HTMLMediaElement {
         // a text track cue target with a time time,
         // the user agent must run these steps:
         let mut events: Vec<(f64, (Atom, DomRoot<TextTrackCue>))> = vec![];
+        let no_gc = cx.no_gc();
         let mut affected_tracks = vec![];
         // https://html.spec.whatwg.org/multipage/#prepare-an-event
         let mut prepare_an_event =
@@ -945,7 +952,7 @@ impl HTMLMediaElement {
                 // the text track track, and the text track cue target.
                 events.push((time, (event, text_track_cue)));
                 // Step 4. Add track to affected tracks.
-                affected_tracks.push(track);
+                affected_tracks.push(track.as_unrooted(no_gc));
             };
 
         // Step 10. For each text track cue in missed cues,
@@ -1003,15 +1010,19 @@ impl HTMLMediaElement {
 
         // Step 15. Sort affected tracks in the same order as the text tracks appear
         // in the media element's list of text tracks, and remove duplicates.
-        // TODO
+        let affected_tracks: Vec<DomRoot<TextTrack>> = text_tracks_list
+            .iter(cx.no_gc())
+            .filter(|text_track| affected_tracks.contains(text_track))
+            .map(|text_track| text_track.as_rooted())
+            .collect();
 
         // Step 16. For each text track in affected tracks, in the list order,
         // queue a media element task given the media element to fire
         // an event named cuechange at the TextTrack object,
         // and, if the text track has a corresponding track element,
         // to then fire an event named cuechange at the track element as well.
-        for text_track in affected_tracks {
-            let text_track = Trusted::new(&*text_track);
+        for text_track in &affected_tracks {
+            let text_track = Trusted::new(&**text_track);
 
             self.owner_global()
                 .task_manager()
@@ -1041,7 +1052,16 @@ impl HTMLMediaElement {
         // if it is not the empty string.
         // For example, for text tracks based on WebVTT,
         // the rules for updating the display of WebVTT text tracks. [WEBVTT]
-        // TODO
+        //
+        // TODO(https://github.com/whatwg/html/issues/12994): Figure out how to pass in language
+        // as well as handling multiple text tracks with different updating rules
+        RulesForUpdatingTheTextTrackRendering::WebVTT.run(
+            cx,
+            self,
+            affected_tracks,
+            None,
+            ShouldResetRenderingControls::No,
+        );
     }
 
     /// <https://html.spec.whatwg.org/multipage/#internal-play-steps>
@@ -1261,7 +1281,7 @@ impl HTMLMediaElement {
                             // Once the readyState attribute reaches HAVE_CURRENT_DATA, after the
                             // loadeddata event has been fired, set the element's
                             // delaying-the-load-event flag to false.
-                            this.delay_load_event(false, cx);
+                            this.delay_load_event(cx, false);
                         }));
                 }
 
@@ -1383,7 +1403,7 @@ impl HTMLMediaElement {
 
         // Step 3. Set the media element's delaying-the-load-event flag to true (this delays the
         // load event).
-        self.delay_load_event(true, cx);
+        self.delay_load_event(cx, true);
 
         // Step 4. Await a stable state, allowing the task that invoked this algorithm to continue.
         // If the resource selection mode in the synchronous section is
@@ -1405,7 +1425,7 @@ impl HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#concept-media-load-algorithm>
-    fn resource_selection_algorithm_sync(&self, base_url: ServoUrl, cx: &mut JSContext) {
+    fn resource_selection_algorithm_sync(&self, cx: &mut JSContext, base_url: ServoUrl) {
         // TODO Step 5. If the media element's blocked-on-parser flag is false, then populate the
         // list of pending text tracks.
         // FIXME(ferjm): Implement blocked_on_parser logic
@@ -1448,7 +1468,7 @@ impl HTMLMediaElement {
 
             // Step 6.none.2. Set the element's delaying-the-load-event flag to false. This stops
             // delaying the load event.
-            self.delay_load_event(false, cx);
+            self.delay_load_event(cx, false);
 
             // Step 6.none.3. End the synchronous section and return.
             return;
@@ -1706,7 +1726,7 @@ impl HTMLMediaElement {
                     return;
                 }
 
-                this.delay_load_event(false, cx);
+                this.delay_load_event(cx, false);
             }));
 
         // Step 9.children.22. Wait until the node after pointer is a node other than the end of the
@@ -1872,7 +1892,7 @@ impl HTMLMediaElement {
                                 return;
                             }
 
-                            this.delay_load_event(false, cx);
+                            this.delay_load_event(cx, false);
                         }));
 
                     // TODO Steps 5.remote.1.4. Wait for the task to be run.
@@ -1975,7 +1995,7 @@ impl HTMLMediaElement {
 
                 // Step 7. Set the element's delaying-the-load-event flag to false. This stops
                 // delaying the load event.
-                this.delay_load_event(false, cx);
+                this.delay_load_event(cx, false);
             }));
     }
 
@@ -2205,8 +2225,8 @@ impl HTMLMediaElement {
 
     pub(crate) fn handle_source_child_insertion(
         &self,
-        source: &HTMLSourceElement,
         cx: &mut JSContext,
+        source: &HTMLSourceElement,
     ) {
         // <https://html.spec.whatwg.org/multipage/#the-source-element:html-element-insertion-steps>
         // Step 2. If parent is a media element that has no src attribute and whose networkState has
@@ -2244,7 +2264,7 @@ impl HTMLMediaElement {
     fn select_next_source_child_after_wait(&self, cx: &mut JSContext) {
         // Step 9.children.24. Set the element's delaying-the-load-event flag back to true (this
         // delays the load event again, in case it hasn't been fired yet).
-        self.delay_load_event(true, cx);
+        self.delay_load_event(cx, true);
 
         // Step 9.children.25. Set the networkState back to NETWORK_LOADING.
         self.network_state.set(NetworkState::Loading);
@@ -2270,7 +2290,7 @@ impl HTMLMediaElement {
     /// <https://html.spec.whatwg.org/multipage/#media-data-processing-steps-list>
     /// => "If the connection is interrupted after some media data has been received..."
     /// => "If the media data is corrupted"
-    fn media_data_processing_fatal_steps(&self, error: u16, cx: &mut JSContext) {
+    fn media_data_processing_fatal_steps(&self, cx: &mut JSContext, error: u16) {
         *self.source_children_pointer.borrow_mut() = None;
         self.current_source_child.set(None);
 
@@ -2289,7 +2309,7 @@ impl HTMLMediaElement {
 
         // Step 4. Set the element's delaying-the-load-event flag to false. This stops delaying
         // the load event.
-        self.delay_load_event(false, cx);
+        self.delay_load_event(cx, false);
 
         // Step 5. Fire an event named error at the media element.
         self.upcast::<EventTarget>().fire_event(cx, atom!("error"));
@@ -2497,7 +2517,7 @@ impl HTMLMediaElement {
                 };
 
                 if let Some(shared_player_id) = shared_player_id_clone.get() {
-                    event_handler.lock().unwrap().handle_player_event(*shared_player_id, event, cx);
+                    event_handler.lock().unwrap().handle_player_event(cx, *shared_player_id, event);
                 } else {
                     error!("Player Action without ID being assigned yet.");
                 }
@@ -2712,7 +2732,7 @@ impl HTMLMediaElement {
         }
     }
 
-    fn playback_error(&self, error: &str, cx: &mut JSContext) {
+    fn playback_error(&self, cx: &mut JSContext, error: &str) {
         error!("Player error: {:?}", error);
 
         // If we have already flagged an error condition while processing
@@ -2729,7 +2749,7 @@ impl HTMLMediaElement {
             self.media_data_processing_failure_steps(cx);
         } else {
             // => "If the media data is corrupted"
-            self.media_data_processing_fatal_steps(MEDIA_ERR_DECODE, cx);
+            self.media_data_processing_fatal_steps(cx, MEDIA_ERR_DECODE);
         }
     }
 
@@ -3249,11 +3269,43 @@ impl HTMLMediaElement {
         }
 
         self.upcast::<Node>().dirty(cx.no_gc(), NodeDamage::Other);
+
+        // https://html.spec.whatwg.org/multipage/#embedded-content-rendering-rules:rules-for-updating-the-text-track-rendering
+        // > When the user agent starts exposing a user interface for a video element,
+        // > the user agent should run the rules for updating the text track rendering
+        // > of each of the text tracks in the video element's list of text tracks
+        // > that are showing and whose text track kind is one of subtitles or captions
+        // > (e.g., for text tracks based on WebVTT,
+        // > the rules for updating the display of WebVTT text tracks). [WEBVTT]
+        self.run_rules_for_updating_the_text_track_rendering_for_current_tracks(cx);
     }
 
-    fn remove_controls(&self) {
+    fn remove_controls(&self, cx: &mut JSContext) {
         if let Some(id) = self.media_controls_id.borrow_mut().take() {
+            // We also rerun this when removing controls, even if time marches on
+            // hasn't run yet. That way, existing cues that are rendered will be
+            // repositioned accordingly
+            self.run_rules_for_updating_the_text_track_rendering_for_current_tracks(cx);
             self.owner_document().unregister_media_controls(&id);
+        }
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#embedded-content-rendering-rules:rules-for-updating-the-text-track-rendering>
+    fn run_rules_for_updating_the_text_track_rendering_for_current_tracks(
+        &self,
+        cx: &mut JSContext,
+    ) {
+        if let Some(text_track_list) = self.text_tracks_list.get() {
+            RulesForUpdatingTheTextTrackRendering::WebVTT.run(
+                cx,
+                self,
+                text_track_list
+                    .iter(cx.no_gc())
+                    .map(|text_track| text_track.as_rooted())
+                    .collect(),
+                None,
+                ShouldResetRenderingControls::Yes,
+            );
         }
     }
 
@@ -3290,8 +3342,8 @@ impl HTMLMediaElement {
     /// renderer.
     pub(crate) fn set_audio_renderer(
         &self,
-        audio_renderer: Option<Arc<Mutex<dyn AudioRenderer>>>,
         cx: &mut JSContext,
+        audio_renderer: Option<Arc<Mutex<dyn AudioRenderer>>>,
     ) {
         *self.audio_renderer.borrow_mut() = audio_renderer;
 
@@ -3946,7 +3998,7 @@ impl VirtualMethods for HTMLMediaElement {
                 if mutation.new_value(attr).is_some() {
                     self.render_controls(cx);
                 } else {
-                    self.remove_controls();
+                    self.remove_controls(cx);
                 }
             },
             _ => (),
@@ -3957,7 +4009,7 @@ impl VirtualMethods for HTMLMediaElement {
     fn unbind_from_tree(&self, cx: &mut JSContext, context: &UnbindContext) {
         self.super_type().unwrap().unbind_from_tree(cx, context);
 
-        self.remove_controls();
+        self.remove_controls(cx);
 
         // Step 1. Await a stable state, allowing the task that removed the media element from the Document to continue.
         // The synchronous section consists of all the remaining steps of this algorithm.
@@ -4033,7 +4085,7 @@ impl MicrotaskRunnable for MediaElementMicrotask {
                 ref base_url,
             } => {
                 if generation_id == elem.generation_id.get() {
-                    elem.resource_selection_algorithm_sync(base_url.clone(), cx);
+                    elem.resource_selection_algorithm_sync(cx, base_url.clone());
                 }
             },
             // https://html.spec.whatwg.org/multipage/#playing-the-media-resource:remove-an-element-from-a-document
@@ -4292,7 +4344,7 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
                 element.media_data_processing_failure_steps(cx);
             } else {
                 // => "If the connection is interrupted after some media data has been received..."
-                element.media_data_processing_fatal_steps(MEDIA_ERR_NETWORK, cx);
+                element.media_data_processing_fatal_steps(cx, MEDIA_ERR_NETWORK);
             }
             return;
         }
@@ -4461,7 +4513,7 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
                 .fire_event(cx, atom!("suspend"));
         } else if status.is_err() && element.ready_state.get() != ReadyState::HaveNothing {
             // => "If the connection is interrupted after some media data has been received..."
-            element.media_data_processing_fatal_steps(MEDIA_ERR_NETWORK, cx);
+            element.media_data_processing_fatal_steps(cx, MEDIA_ERR_NETWORK);
         } else {
             // => "If the media data can be fetched but is found by inspection to be in an
             // unsupported format, or can otherwise not be rendered at all"
@@ -4473,7 +4525,7 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
 
     fn process_csp_violations(
         &mut self,
-        cx: &mut js::context::JSContext,
+        cx: &mut JSContext,
         _request_id: RequestId,
         violations: Vec<Violation>,
     ) {
@@ -4594,7 +4646,7 @@ impl HTMLMediaElementEventHandler {
         }
     }
 
-    fn handle_player_event(&self, player_id: usize, event: PlayerEvent, cx: &mut JSContext) {
+    fn handle_player_event(&self, cx: &mut JSContext, player_id: usize, event: PlayerEvent) {
         let Some(element) = self.element.root() else {
             return;
         };
@@ -4608,7 +4660,7 @@ impl HTMLMediaElementEventHandler {
             PlayerEvent::DurationChanged(duration) => element.playback_duration_changed(duration),
             PlayerEvent::EndOfStream => element.playback_end(cx),
             PlayerEvent::EnoughData => element.playback_enough_data(),
-            PlayerEvent::Error(ref error) => element.playback_error(error, cx),
+            PlayerEvent::Error(ref error) => element.playback_error(cx, error),
             PlayerEvent::MetadataUpdated(ref metadata) => {
                 element.playback_metadata_updated(cx, metadata)
             },

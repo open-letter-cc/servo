@@ -11518,42 +11518,70 @@
   "testharness": {
    "accessibility-tree": {
     "accessibility-update-basic-mutation.html": [
-     "29f6c8d5c9c46e1134b9a0bb5ad1636554e1cf44",
+     "f86426901b096137876adf6fcbb272e5bca47658",
      [
       null,
       {}
      ]
     ],
     "accessibility-update-children-of-heading-change.html": [
-     "a5147a6a8f6745f6e30e18afdf5da3bc9ce8f7c2",
+     "7307d8b15ef76fa8e8cae01ab7e2c8e4246b4131",
      [
       null,
       {}
      ]
     ],
     "accessibility-update-descendants-of-heading-change.html": [
-     "bd8c0e35509d8d32038e1b5df7e06fa19c0c7ff9",
+     "05590d2c258901018a5f687431f7a6b2203a0b78",
+     [
+      null,
+      {}
+     ]
+    ],
+    "accessibility-update-display-none-scroll.html": [
+     "32b9a2c189053f99438d77cd6f639ac1804faf86",
+     [
+      null,
+      {}
+     ]
+    ],
+    "accessibility-update-layout-from-layout-root-failed.html": [
+     "cd4f7d3e7aee14f34153a21c6483fc38070f6d9b",
+     [
+      null,
+      {}
+     ]
+    ],
+    "accessibility-update-layout-from-layout-root.html": [
+     "31922c822dbe91d4e9e2d6a4e111ff95a2d2a931",
+     [
+      null,
+      {}
+     ]
+    ],
+    "accessibility-update-layout-from-layout-roots.html": [
+     "981af352cf72b3cfe5bfd9e0044aced923d098e1",
      [
       null,
       {}
      ]
     ],
     "accessibility-update-mutation-move-nodes.html": [
-     "71e749f898ce0e731986dbdef48bc7f76ce20932",
+     "ff24dd3a6615a5ca8792430409f90a49c54e193c",
      [
       null,
       {}
      ]
     ],
     "accessibility-update-partial-subtree-move-and-delete.html": [
-     "8e61b0b1f2484d387efe2aebbaf81331fae4faf4",
+     "57f93cd7ff31d77ff29e921c9075fc024c84a27a",
      [
       null,
       {}
      ]
     ],
     "accessibility-update-text-change.html": [
-     "c39136e64d3ced27ef7d04c0e722bc90f3af469a",
+     "7b12b07e20ef40ee20d409a4a4895fc05bc1ce02",
      [
       null,
       {}
@@ -13468,6 +13496,15 @@
       }
      ]
     ],
+    "input-type-password-copy-and-cut.html": [
+     "2dbbe6b2f5003a7cd57ddc98de1447ced44a77e5",
+     [
+      null,
+      {
+       "testdriver": true
+      }
+     ]
+    ],
     "key-event-text-input-backspace.html": [
      "fa6c35fd6a0ef966c313a9ef7ac720ea6be27113",
      [
@@ -14652,6 +14689,13 @@
       {}
      ]
     ],
+    "input-select-focus.html": [
+     "5996de7bbb67132d4e748e1f6779013a2cdefa1a",
+     [
+      null,
+      {}
+     ]
+    ],
     "input-value.html": [
      "a2a12d44d0331164651816710eeb2ddcb1738735",
      [
@@ -14667,7 +14711,7 @@
      ]
     ],
     "interfaces.https.html": [
-     "99e8dc9060c5b9f3bd73783ef141df5c5ceeb09d",
+     "d5eb8af441418639ef224afc0bff878afc89497c",
      [
       null,
       {}
@@ -15265,6 +15309,13 @@
         ]
        ]
       }
+     ]
+    ],
+    "textarea-select-focus.html": [
+     "7f6bfe3c4f07d1fdd4fa260967d1756d918947a1",
+     [
+      null,
+      {}
      ]
     ],
     "textcontent.html": [

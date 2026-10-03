@@ -351,6 +351,10 @@ impl WebGLRenderingContext {
         self.webgl_version
     }
 
+    pub(crate) fn api_type(&self) -> GlType {
+        self.api_type
+    }
+
     pub(crate) fn limits(&self) -> &GLLimits {
         &self.limits
     }
@@ -1604,10 +1608,7 @@ impl WebGLRenderingContext {
             self.bound_renderbuffer.get().ok_or(InvalidOperation),
             return
         );
-        handle_potential_webgl_error!(
-            self,
-            rb.storage(self.api_type, samples, internal_format, width, height)
-        );
+        handle_potential_webgl_error!(self, rb.storage(samples, internal_format, width, height));
         if let Some(fb) = self.bound_draw_framebuffer.get() {
             fb.invalidate_renderbuffer(&rb);
         }
@@ -2375,6 +2376,11 @@ impl WebGLRenderingContextMethods<crate::DomTypeHolder> for WebGLRenderingContex
                 let (sender, receiver) = webgl_channel().unwrap();
                 self.send_command(WebGLCommand::GetParameterInt(param, sender));
                 retval.set(Int32Value(receiver.recv().unwrap()))
+            },
+            Parameter::UInt(param) => {
+                let (sender, receiver) = webgl_channel().unwrap();
+                self.send_command(WebGLCommand::GetParameterUInt(param, sender));
+                retval.set(UInt32Value(receiver.recv().unwrap()))
             },
             Parameter::Int2(param) => {
                 let (sender, receiver) = webgl_channel().unwrap();

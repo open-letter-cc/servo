@@ -70,7 +70,7 @@ use crate::dom::node::virtualmethods::VirtualMethods;
 use crate::dom::node::{
     BindContext, MoveContext, Node, NodeTraits, UnbindContext, from_untrusted_node_address,
 };
-use crate::dom::shadowroot::ShadowRoot;
+use crate::dom::shadowroot::shadowroot::ShadowRoot;
 use crate::dom::text::Text;
 use crate::dom::window::scrolling_box::{ScrollAxisState, ScrollRequirement};
 use crate::event_loop::script_thread::ScriptThread;
@@ -995,7 +995,7 @@ impl HTMLElement {
         let root_element = element.root_element();
         let root_node = root_element.upcast::<Node>();
         root_node
-            .traverse_preorder_non_rooting(no_gc, ShadowIncluding::No)
+            .traverse_preorder_unrooted(no_gc, ShadowIncluding::No)
             .filter_map(UnrootedDom::downcast::<HTMLLabelElement>)
             .filter(|elem| match elem.GetControl(no_gc) {
                 Some(control) => &*control == self,
@@ -1013,7 +1013,7 @@ impl HTMLElement {
         let root_element = element.root_element();
         let root_node = root_element.upcast::<Node>();
         root_node
-            .traverse_preorder_non_rooting(no_gc, ShadowIncluding::No)
+            .traverse_preorder_unrooted(no_gc, ShadowIncluding::No)
             .filter_map(UnrootedDom::downcast::<HTMLLabelElement>)
             .filter(|elem| match elem.GetControl(no_gc) {
                 Some(control) => &*control == self,

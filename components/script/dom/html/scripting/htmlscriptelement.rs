@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-#![cfg_attr(crown, allow(crown::jscontext_first_arg))]
-
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ffi::CStr;
@@ -116,7 +114,7 @@ pub(crate) struct HTMLScriptElement {
     marked_as_render_blocking: Cell<bool>,
 
     /// <https://html.spec.whatwg.org/multipage/#concept-script-result>
-    result: DomRefCell<Option<ScriptResult>>,
+    result: DomRefCell<Option<Box<ScriptResult>>>,
 }
 
 impl HTMLScriptElement {
@@ -144,7 +142,7 @@ impl HTMLScriptElement {
     }
 
     pub(crate) fn new(
-        cx: &mut js::context::JSContext,
+        cx: &mut JSContext,
         local_name: LocalName,
         prefix: Option<Prefix>,
         document: &Document,
@@ -202,6 +200,34 @@ impl HTMLScriptElement {
             ExternalScriptKind::ParsingBlocking => self.parser_document.as_rooted(),
         }
     }
+
+    /// <https://html.spec.whatwg.org/multipage/#steps-to-run-when-the-result-is-ready>
+    fn finish_fetching_a_script(&self, cx: &mut JSContext, script_kind: ExternalScriptKind) {
+        let load = self.result.take().expect("Result must be ready to proceed");
+
+        // Step 2. If el's steps to run when the result is ready are not null, then run them.
+        match script_kind {
+            ExternalScriptKind::Asap => {
+                let document = self.preparation_time_document.get().unwrap();
+                document.asap_script_loaded(cx, self, *load)
+            },
+            ExternalScriptKind::AsapInOrder => {
+                let document = self.preparation_time_document.get().unwrap();
+                document.asap_in_order_script_loaded(cx, self, *load)
+            },
+            ExternalScriptKind::Deferred => {
+                let document = self.parser_document.as_rooted();
+                document.deferred_script_loaded(cx, self, *load);
+            },
+            ExternalScriptKind::ParsingBlocking => {
+                let document = self.parser_document.as_rooted();
+                document.pending_parsing_blocking_script_loaded(self, *load, cx);
+            },
+        }
+
+        // Step 4. Set el's delaying the load event to false.
+        LoadBlocker::terminate(&self.delaying_the_load_event, cx);
+    }
 }
 
 /// Supported script types as defined by
@@ -230,38 +256,6 @@ pub(crate) enum ScriptType {
     Classic,
     Module,
     ImportMap,
-}
-
-/// <https://html.spec.whatwg.org/multipage/#steps-to-run-when-the-result-is-ready>
-fn finish_fetching_a_script(
-    elem: &HTMLScriptElement,
-    script_kind: ExternalScriptKind,
-    cx: &mut JSContext,
-) {
-    let load = elem.result.take().expect("Result must be ready to proceed");
-
-    // Step 2. If el's steps to run when the result is ready are not null, then run them.
-    match script_kind {
-        ExternalScriptKind::Asap => {
-            let document = elem.preparation_time_document.get().unwrap();
-            document.asap_script_loaded(cx, elem, load)
-        },
-        ExternalScriptKind::AsapInOrder => {
-            let document = elem.preparation_time_document.get().unwrap();
-            document.asap_in_order_script_loaded(cx, elem, load)
-        },
-        ExternalScriptKind::Deferred => {
-            let document = elem.parser_document.as_rooted();
-            document.deferred_script_loaded(cx, elem, load);
-        },
-        ExternalScriptKind::ParsingBlocking => {
-            let document = elem.parser_document.as_rooted();
-            document.pending_parsing_blocking_script_loaded(elem, load, cx);
-        },
-    }
-
-    // Step 4. Set el's delaying the load event to false.
-    LoadBlocker::terminate(&elem.delaying_the_load_event, cx);
 }
 
 pub(crate) type ScriptResult = Result<Script, ()>;
@@ -303,7 +297,7 @@ impl FetchResponseListener for ClassicContext {
 
     fn process_response(
         &mut self,
-        _: &mut js::context::JSContext,
+        _: &mut JSContext,
         _: RequestId,
         metadata: Result<FetchMetadata, NetworkError>,
     ) {
@@ -337,12 +331,7 @@ impl FetchResponseListener for ClassicContext {
         };
     }
 
-    fn process_response_chunk(
-        &mut self,
-        _: &mut js::context::JSContext,
-        _: RequestId,
-        chunk: Bytes,
-    ) {
+    fn process_response_chunk(&mut self, _: &mut JSContext, _: RequestId, chunk: Bytes) {
         if self.status.is_ok() {
             self.data.extend_from_slice(&chunk);
         }
@@ -352,7 +341,7 @@ impl FetchResponseListener for ClassicContext {
     /// step 4-9
     fn process_response_eof(
         mut self,
-        cx: &mut js::context::JSContext,
+        cx: &mut JSContext,
         _: RequestId,
         response: Result<(), NetworkError>,
         timing: ResourceFetchTiming,
@@ -369,8 +358,8 @@ impl FetchResponseListener for ClassicContext {
                     error, self.url
                 );
                 // Step 6, response is an error.
-                *elem.result.borrow_mut() = Some(Err(()));
-                finish_fetching_a_script(&elem, self.kind, cx);
+                *elem.result.borrow_mut() = Some(Box::new(Err(())));
+                elem.finish_fetching_a_script(cx, self.kind);
                 return;
             },
             _ => {},
@@ -446,14 +435,14 @@ impl FetchResponseListener for ClassicContext {
                 .is_null());
             }
         } else {*/
-        *elem.result.borrow_mut() = Some(Ok(Script::Classic(script)));
-        finish_fetching_a_script(&elem, self.kind, cx);
+        *elem.result.borrow_mut() = Some(Box::new(Ok(Script::Classic(script))));
+        elem.finish_fetching_a_script(cx, self.kind);
         // }
     }
 
     fn process_csp_violations(
         &mut self,
-        cx: &mut js::context::JSContext,
+        cx: &mut JSContext,
         _request_id: RequestId,
         violations: Vec<Violation>,
     ) {
@@ -860,9 +849,9 @@ impl HTMLScriptElement {
                         script_fetch_options,
                         move |cx, module_tree| {
                             let load = module_tree.map(Script::Module).ok_or(());
-                            *script.result.borrow_mut() = Some(load);
+                            *script.result.borrow_mut() = Some(Box::new(load));
 
-                            finish_fetching_a_script(&script, kind, cx);
+                            script.finish_fetching_a_script(cx, kind);
                         },
                     );
                 },
@@ -931,7 +920,7 @@ impl HTMLScriptElement {
                         introduction_type,
                         move |_, module_tree| {
                             let load = module_tree.map(Script::Module).ok_or(());
-                            *script.result.borrow_mut() = Some(load);
+                            *script.result.borrow_mut() = Some(Box::new(load));
 
                             let trusted = Trusted::new(&*script);
 
@@ -942,7 +931,8 @@ impl HTMLScriptElement {
                                 .networking_task_source()
                                 .queue(task!(terminate_module_fetch: move |cx| {
                                     // Mark as ready el given result.
-                                    finish_fetching_a_script(&trusted.root(), kind, cx);
+                                    let element = trusted.root();
+                                    element.finish_fetching_a_script(cx, kind);
                                 }));
                         },
                     );
@@ -1155,7 +1145,7 @@ impl VirtualMethods for HTMLScriptElement {
 
     fn attribute_mutated(
         &self,
-        cx: &mut js::context::JSContext,
+        cx: &mut JSContext,
         attr: AttrRef<'_>,
         mutation: AttributeMutation,
     ) {
@@ -1227,7 +1217,7 @@ impl VirtualMethods for HTMLScriptElement {
         }
     }
 
-    fn unbind_from_tree(&self, cx: &mut js::context::JSContext, context: &UnbindContext) {
+    fn unbind_from_tree(&self, cx: &mut JSContext, context: &UnbindContext) {
         self.super_type().unwrap().unbind_from_tree(cx, context);
 
         if self.marked_as_render_blocking.replace(false) {
