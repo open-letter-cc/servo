@@ -17,17 +17,36 @@ use preferences::ServoPreferences;
 /// The ABI version of this capi surface.
 ///
 /// This is incremented whenever a struct layout, an enum's numbering, or a
-/// function signature exported by this crate changes in a way that is not
-/// purely additive (a struct growing new fields at its end, in a way an
-/// embedder built against an older header cannot misread as an existing
-/// field, does not require a bump; changing an existing field's meaning,
-/// reordering fields, or removing one does).
+/// function signature exported by this crate changes in a way an embedder
+/// built against an older header could get wrong. Changing an existing
+/// field's meaning, reordering fields and removing one all qualify.
+///
+/// **So does a struct passed or returned by value growing at all.** Appending
+/// a field is source-compatible — recompile against the new header and a
+/// positional initializer zero-fills what it does not mention — but it is not
+/// binary-compatible, and the distinction is the whole point of this number.
+/// `servo_webview_builder_set_delegate` takes a `ServoWebViewDelegate` *by
+/// value*, so a caller built against a smaller header pushes fewer bytes than
+/// this crate reads, and the difference is read out of whatever happened to be
+/// next to it: a function pointer assembled from adjacent stack. Nothing
+/// diagnoses that, which is why appending to such a struct bumps this.
+///
+/// A struct only ever reached behind a pointer can grow without a bump, since
+/// the callee reads only fields the caller also knows about.
 ///
 /// Embedders should call [`servo_capi_abi_version`] once, before constructing
 /// any struct defined by this crate, and refuse to proceed if it disagrees
 /// with the version their own headers were generated against, rather than
-/// reading a struct whose shape they have guessed wrong.
-pub const SERVO_CAPI_ABI_VERSION: u32 = 1;
+/// reading, or passing, a struct whose shape they have guessed wrong.
+///
+/// # History
+///
+/// - **2** — `ServoWebViewDelegate` grew from 64 to 128 bytes across several
+///   additions. Version 1 was still reported throughout, which left a
+///   by-value caller nothing to check against; that is the bug this policy
+///   now exists to prevent.
+/// - **1** — the first version reported.
+pub const SERVO_CAPI_ABI_VERSION: u32 = 2;
 
 /// Returns the ABI version of this capi build. See [`SERVO_CAPI_ABI_VERSION`].
 #[unsafe(no_mangle)]

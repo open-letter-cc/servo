@@ -261,15 +261,29 @@ pub struct ServoWebViewDelegate {
     /// Called when script asks for a new top-level browsing context, through
     /// `window.open` or a target that names a new context.
     ///
-    /// `webview` is the opener. `request` describes what was asked for and is valid
-    /// only for the duration of this call.
+    /// `webview` is the opener. `request` is an opaque token, valid only for the
+    /// duration of this call.
     ///
     /// Call [`servo_webview_accept_new`] with `request` to accept, or do nothing to
-    /// decline. Declining is what an embedder does when the open belongs somewhere
-    /// other than a new browsing context: script then sees the blocked open it already
-    /// has to handle, and the embedder is free to do what it likes with the requested
-    /// URL instead. Nothing links the two, so a URL opened that way is a fresh load,
-    /// not a continuation of this one.
+    /// decline. Declining means script sees the blocked open it already has to handle,
+    /// and no browsing context is created.
+    ///
+    /// # This callback cannot tell you where the popup is going
+    ///
+    /// A new browsing context is created on `about:blank` and navigated afterwards, so
+    /// the URL the opener asked for does not exist anywhere in the engine yet. There is
+    /// nothing to pass here and nothing to gate on.
+    ///
+    /// Where it does appear: **an accepted context's first navigation is the URL the
+    /// opener asked for**, delivered to `request_navigation` on the delegate passed to
+    /// `servo_webview_accept_new` — which returns `bool`, so it can be refused. The
+    /// exception is an open that named no URL, or named `about:blank`: then there is no
+    /// subsequent navigation at all and the context stays on `about:blank`.
+    ///
+    /// So an embedder that must see the URL before committing to a window accepts into
+    /// a context it is willing to throw away, reads the URL from that first
+    /// `request_navigation`, refuses it, and frees the `WebView` — having fetched
+    /// nothing. Declining here fetches nothing either, but yields no URL.
     ///
     /// The return value is advisory and is not what decides the outcome: the outcome is
     /// decided by whether the request was claimed. Returning `true` without accepting
@@ -588,16 +602,7 @@ impl WebViewDelegate for ServoWebViewDelegate {
             return;
         };
 
-        // `url` owns the serialization for the duration of the callback, in the same way
-        // as every other string this delegate passes out.
-        let url = create_new_webview_request
-            .requested_url()
-            .as_str()
-            .to_owned();
-        let request = ServoNewWebViewRequest {
-            url_ptr: url.as_ptr(),
-            url_len: url.len(),
-        };
+        let request = ServoNewWebViewRequest { _reserved: 0 };
 
         // Make the request claimable by `servo_webview_accept_new` for the duration of
         // the callback, keyed by the address of the borrowed view the embedder is handed.
@@ -612,7 +617,7 @@ impl WebViewDelegate for ServoWebViewDelegate {
         // `ServoWebViewDelegate` struct.
         //
         // The `webview` raw pointer is derived from a valid `webview` handle, and
-        // `request` borrows `url`, which outlives the call.
+        // `request` outlives the call.
         //
         // The callback is contracted not to unwind, but it is contained here anyway so
         // that a panicking embedder cannot tear down Servo or strand the request.
@@ -623,8 +628,6 @@ impl WebViewDelegate for ServoWebViewDelegate {
                 self.user_data,
             )
         }));
-
-        drop(url);
 
         // Whether the open proceeds is decided by whether the request was claimed, not by
         // the return value. A claimed request has already answered the constellation with
@@ -846,21 +849,27 @@ const _: () = assert!(
 /// A request from script for a new top-level browsing context, as passed to
 /// [`ServoWebViewDelegate::request_create_new`].
 ///
-/// This is a borrowed view that is valid only for the duration of that call; the
-/// embedder must copy anything it needs to retain and must not use the pointer after the
-/// callback returns.
-#[repr(C)]
+/// **Opaque.** It is a token to hand back to [`servo_webview_accept_new`] and nothing
+/// else: there is no field to read, and the pointer is valid only for the duration of
+/// the callback that received it.
+///
+/// It carries no URL deliberately. A new browsing context is created on `about:blank`
+/// and navigated afterwards, so at the moment this request exists the URL the opener
+/// asked for does not exist anywhere in the engine — see
+/// [`ServoWebViewDelegate::request_create_new`] for where it does appear. Being opaque
+/// also means a field could be added here later without an ABI break, since the
+/// embedder only ever holds a pointer to it.
+// cbindgen:opaque
 pub struct ServoNewWebViewRequest {
-    /// The URL the open requested, as a serialization. Not NUL-terminated, and borrowed
-    /// for the duration of the callback only.
-    pub url_ptr: *const u8,
-    /// The length of `url_ptr` in bytes.
-    pub url_len: usize,
+    /// Reserved. This type exists to be addressed, not read; the field keeps it
+    /// non-zero-sized, so two live requests cannot share an address and be mistaken
+    /// for one another.
+    _reserved: u64,
 }
 
 const _: () = assert!(
-    size_of::<ServoNewWebViewRequest>() == 16,
-    "ServoNewWebViewRequest must stay 16 bytes wide"
+    size_of::<ServoNewWebViewRequest>() == 8,
+    "ServoNewWebViewRequest must stay 8 bytes wide"
 );
 
 /// A new-browsing-context request currently being offered to

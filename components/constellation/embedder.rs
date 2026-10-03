@@ -34,14 +34,8 @@ pub enum ConstellationToEmbedderMsg {
         JavaScriptEvaluationId,
         Result<JSValue, JavaScriptEvaluationError>,
     ),
-    /// Whether or not to allow script to open a new tab/browser. The [`ServoUrl`] is
-    /// the URL the open requested, which the embedder needs in order to decide what
-    /// kind of view to create for it, or whether to decline and handle it itself.
-    AllowOpeningWebView(
-        WebViewId,
-        ServoUrl,
-        GenericSender<Option<NewWebViewDetails>>,
-    ),
+    /// Whether or not to allow script to open a new tab/browser
+    AllowOpeningWebView(WebViewId, GenericSender<Option<NewWebViewDetails>>),
     /// Whether or not to allow a pipeline to load a url.
     AllowNavigationRequest(WebViewId, PipelineId, ServoUrl),
     /// The history state has changed.
