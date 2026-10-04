@@ -202,6 +202,9 @@ impl FileManager {
             FileManagerThreadMsg::RevokeTokenForFile(token, id) => {
                 self.invalidate_token(&FileTokenCheck::Required(token), &id);
             },
+            FileManagerThreadMsg::Abort(id, origin, sender) => {
+                let _ = sender.send(self.store.dec_ref(&id, &origin));
+            },
         }
     }
 
