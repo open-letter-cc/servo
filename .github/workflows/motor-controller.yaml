@@ -161,7 +161,7 @@ jobs:
 
       - name: Generate servo_capi.h
         run: |
-          cargo install cbindgen --version 0.26.0
+          cargo install cbindgen --version 0.29.1
           cbindgen --config ffi/capi/cbindgen.toml --crate zdr-capi-shim --output "$env:CARGO_TARGET_DIR\release\servo_capi.h"
           Get-ChildItem "$env:CARGO_TARGET_DIR\release\servo_capi.h" | Select-Object Name, Length
 
@@ -442,7 +442,7 @@ jobs:
           $suffix = if ("${{ inputs.multiprocess }}" -eq "true") { "-multiprocess" } else { "" }
           $tag = "capi-$($env:GITHUB_SHA.Substring(0,11))$suffix"
 
-          $files = @("$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll")
+          $files = @("$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll", "$rel\servo_capi.h")
           Get-FileHash -Algorithm SHA256 $files |
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content -Encoding utf8 "$rel\SHA256SUMS"
