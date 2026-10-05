@@ -111,8 +111,7 @@ use crate::tasks::task::TaskCanceller;
 use crate::tasks::task_manager::TaskManager;
 use ipc_channel::ipc::IpcSender;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
-use net_traits::generic_sender::GenericSender;
-
+use servo_base::generic_channel::GenericSender;
 
 /// <https://html.spec.whatwg.org/multipage/#animation-frames>
 pub(crate) fn prepare_workerscope_init(
@@ -1168,16 +1167,16 @@ impl WorkerGlobalScope {
         let tokens: Vec<_> = self.filemanager_tokens.borrow().iter().cloned().collect();
 
         if !tokens.is_empty() {
-            // 2. Fetch the required ImmutableOrigin from the scope using .immutable()
+            // 2. Fetch the required ImmutableOrigin from the scope
             let origin = self.upcast::<GlobalScope>().origin().immutable();
 
             for token in tokens {
                 // 3. Create a channel to satisfy the GenericSender requirement of the Abort contract
                 let (tx, _rx) = ipc_channel::ipc::channel().unwrap();
                 
-                // 4. Send the required 3 arguments: token, origin, and the mapped GenericSender wrapper
+                // 4. Transform the native IpcSender into a GenericSender using .into()
                 let _ = self.filemanager_handle.send(
-                    FileManagerThreadMsg::Abort(token, origin.clone(), GenericSender::Ipc(tx))
+                    FileManagerThreadMsg::Abort(token, origin.clone(), tx.into())
                 );
             }
         }
@@ -1187,8 +1186,7 @@ impl WorkerGlobalScope {
             dedicated.clear_animation_frame_callbacks_and_unregister();
         }
 
-        // Step 2. Set workerGlobal's closing flag to true. (This prevents any
-        // further tasks from being queued.)
+        // Step 2. Set workerGlobal's closing flag to true.
         self.closing.store(true, Ordering::SeqCst);
         self.upcast::<GlobalScope>()
             .task_manager()
@@ -1198,11 +1196,12 @@ impl WorkerGlobalScope {
             factory.abort_pending_upgrades_and_close_databases();
         }
 
-        // Safe cleanup: Extract and trigger the thread waker safely outside the event task lifecycle
+        // Clean up the thread waker safely
         if let Some(waker) = self.event_loop_waker.borrow_mut().take() {
             waker.wake();
         }
     }
+
 
 
 
