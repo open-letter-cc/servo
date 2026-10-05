@@ -109,8 +109,10 @@ use crate::runtime::job_queue::{MicrotaskRunnable, UserMicrotask, job_queue_micr
 use crate::runtime::script_runtime::{IntroductionType, Runtime, get_reports};
 use crate::tasks::task::TaskCanceller;
 use crate::tasks::task_manager::TaskManager;
+use ipc_channel::ipc::IpcSender;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
-use net_traits::filemanager_thread::FileManagerThreadHandle;
+use net_traits::generic_sender::GenericSender;
+
 
 /// <https://html.spec.whatwg.org/multipage/#animation-frames>
 pub(crate) fn prepare_workerscope_init(
@@ -393,11 +395,13 @@ pub(crate) struct WorkerGlobalScope {
     #[ignore_malloc_size_of = "mozjs"]
     module_map: DomRefCell<HashMapTracedValues<ModuleRequest, ModuleStatus>>,
     #[no_trace]
-    filemanager_handle: FileManagerThreadHandle,
+    filemanager_handle: IpcSender<FileManagerThreadMsg>,
     #[no_trace]
     filemanager_tokens: DomRefCell<HashSet<Uuid>>,
     #[no_trace]
+    #[ignore_malloc_size_of = "Waker is a standard library type that does not implement MallocSizeOf"]
     event_loop_waker: RefCell<Option<std::task::Waker>>,
+
 }
 
 impl WorkerGlobalScope {
@@ -1164,16 +1168,16 @@ impl WorkerGlobalScope {
         let tokens: Vec<_> = self.filemanager_tokens.borrow().iter().cloned().collect();
 
         if !tokens.is_empty() {
-            // 2. Fetch the required ImmutableOrigin from the scope
-            let origin = self.upcast::<GlobalScope>().origin().immutable_origin();
+            // 2. Fetch the required ImmutableOrigin from the scope using .immutable()
+            let origin = self.upcast::<GlobalScope>().origin().immutable();
 
             for token in tokens {
                 // 3. Create a channel to satisfy the GenericSender requirement of the Abort contract
                 let (tx, _rx) = ipc_channel::ipc::channel().unwrap();
                 
-                // 4. Send the required 3 arguments: the token, the origin, and the reply channel
+                // 4. Send the required 3 arguments: token, origin, and the mapped GenericSender wrapper
                 let _ = self.filemanager_handle.send(
-                    FileManagerThreadMsg::Abort(token, origin.clone(), tx)
+                    FileManagerThreadMsg::Abort(token, origin.clone(), GenericSender::Ipc(tx))
                 );
             }
         }
@@ -1190,18 +1194,16 @@ impl WorkerGlobalScope {
             .task_manager()
             .cancel_all_tasks_and_ignore_future_tasks();
 
-        // From <https://github.io>
         if let Some(factory) = self.upcast::<GlobalScope>().indexeddb_factory() {
             factory.abort_pending_upgrades_and_close_databases();
         }
 
-        // SAFE CONVENTION: Safely take the waker out of the RefCell and trigger it.
-        // This ensures the thread drops the waker and wakes up the underlying event loop
-        // to finish processing its final teardown routine without panicking.
+        // Safe cleanup: Extract and trigger the thread waker safely outside the event task lifecycle
         if let Some(waker) = self.event_loop_waker.borrow_mut().take() {
             waker.wake();
         }
     }
+
 
 
     pub(crate) fn init_debugger_global(
