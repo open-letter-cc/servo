@@ -1158,6 +1158,23 @@ impl WorkerGlobalScope {
 
     /// <https://html.spec.whatwg.org/multipage/#close-a-worker>
     pub(crate) fn close(&self) {
+        // 0. Drain or borrow the tokens to avoid keeping a borrow active during IPC sends
+        let tokens: Vec<_> = self.filemanager_tokens.borrow().iter().cloned().collect();
+
+        if !tokens.is_empty() {
+            // 2. Fetch the required ImmutableOrigin from the scope
+            let origin = self.upcast::<GlobalScope>().origin().immutable_origin();
+
+            for token in tokens {
+                // 3. Create a channel to satisfy the GenericSender requirement of the Abort contract
+                let (tx, _rx) = ipc_channel::ipc::channel().unwrap();
+                
+                // 4. Send the required 3 arguments: the token, the origin, and the reply channel
+                let _ = self.filemanager_handle.send(
+                    FileManagerThreadMsg::Abort(token, origin.clone(), tx)
+                );
+            }
+        }
         // Step 1. Discard any tasks that have been added to workerGlobal's relevant
         // agent's event loop's task queues.
         //
@@ -1248,14 +1265,5 @@ impl CspViolationsProcessor for WorkerCspProcessor {
     fn process_csp_violations(&self, cx: &mut JSContext, violations: Vec<Violation>) {
         self.global_scope
             .report_csp_violations(cx, violations, None, None);
-    }
-}
-impl Drop for WorkerGlobalScope {
-    fn drop(&mut self) {
-        for token in self.filemanager_tokens.borrow().iter() {
-            let _ = self.filemanager_handle.send(
-                FileManagerThreadMsg::Abort(*token)
-            );
-        }
     }
 }
