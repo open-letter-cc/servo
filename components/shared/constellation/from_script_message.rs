@@ -42,7 +42,8 @@ use storage_traits::webstorage_thread::WebStorageType;
 use strum::IntoStaticStr;
 #[cfg(feature = "webgpu")]
 use webgpu_traits::{WebGPU, WebGPUAdapterResponse};
-
+use net_traits::filemanager_thread::FileManagerThreadMsg;
+use ipc_channel::ipc::IpcSender;
 use crate::structured_data::{BroadcastChannelMsg, StructuredSerializedData};
 use crate::{
     LogEntry, MessagePortMsg, PortMessageTask, PortTransferInfo, SessionHistoryTraversalRequest,
@@ -510,6 +511,8 @@ pub struct IFrameLoadInfoWithData {
 pub struct WorkerGlobalScopeInit {
     /// Chan to a resource thread
     pub resource_threads: ResourceThreads,
+    ///for faster blob eviction
+    pub filemanager_thread: IpcSender<FileManagerThreadMsg>,
     /// Chan to a storage thread
     pub storage_threads: StorageThreads,
     /// Chan to the memory profiler

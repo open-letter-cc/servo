@@ -109,6 +109,8 @@ use crate::runtime::job_queue::{MicrotaskRunnable, UserMicrotask, job_queue_micr
 use crate::runtime::script_runtime::{IntroductionType, Runtime, get_reports};
 use crate::tasks::task::TaskCanceller;
 use crate::tasks::task_manager::TaskManager;
+use net_traits::filemanager_thread::FileManagerThreadMsg;
+use net_traits::filemanager_thread::FileManagerThreadHandle;
 
 /// <https://html.spec.whatwg.org/multipage/#animation-frames>
 pub(crate) fn prepare_workerscope_init(
@@ -131,6 +133,7 @@ pub(crate) fn prepare_workerscope_init(
 
     WorkerGlobalScopeInit {
         resource_threads: global.resource_threads().clone(),
+        filemanager_thread: global.filemanager_thread().clone(),
         storage_threads: global.storage_threads().clone(),
         mem_profiler_chan: global.mem_profiler_chan().clone(),
         to_devtools_sender: global.devtools_chan().cloned(),
@@ -389,6 +392,10 @@ pub(crate) struct WorkerGlobalScope {
     /// <https://html.spec.whatwg.org/multipage/#concept-settings-object-module-map>
     #[ignore_malloc_size_of = "mozjs"]
     module_map: DomRefCell<HashMapTracedValues<ModuleRequest, ModuleStatus>>,
+    #[no_trace]
+    filemanager_handle: FileManagerThreadHandle,
+    #[no_trace]
+    filemanager_tokens: DomRefCell<HashSet<Uuid>>,
 }
 
 impl WorkerGlobalScope {
@@ -464,6 +471,10 @@ impl WorkerGlobalScope {
             origin: MutableOrigin::new(init.origin),
             font_context,
             module_map: Default::default(),
+            filemanager_handle: init.filemanager_thread,
+            filemanager_tokens: DomRefCell::new(HashSet::new()),
+            event_loop_waker: RefCell::default(),
+
         }
     }
 
@@ -1237,5 +1248,14 @@ impl CspViolationsProcessor for WorkerCspProcessor {
     fn process_csp_violations(&self, cx: &mut JSContext, violations: Vec<Violation>) {
         self.global_scope
             .report_csp_violations(cx, violations, None, None);
+    }
+}
+impl Drop for WorkerGlobalScope {
+    fn drop(&mut self) {
+        for token in self.filemanager_tokens.borrow().iter() {
+            let _ = self.filemanager_handle.send(
+                FileManagerThreadMsg::Abort(*token)
+            );
+        }
     }
 }
