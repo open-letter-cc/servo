@@ -396,6 +396,8 @@ pub(crate) struct WorkerGlobalScope {
     filemanager_handle: FileManagerThreadHandle,
     #[no_trace]
     filemanager_tokens: DomRefCell<HashSet<Uuid>>,
+    #[no_trace]
+    event_loop_waker: RefCell<Option<std::task::Waker>>,
 }
 
 impl WorkerGlobalScope {
@@ -1177,8 +1179,6 @@ impl WorkerGlobalScope {
         }
         // Step 1. Discard any tasks that have been added to workerGlobal's relevant
         // agent's event loop's task queues.
-        //
-        // Worker rAF callbacks are stored outside the task queues.
         if let Some(dedicated) = self.downcast::<DedicatedWorkerGlobalScope>() {
             dedicated.clear_animation_frame_callbacks_and_unregister();
         }
@@ -1190,14 +1190,19 @@ impl WorkerGlobalScope {
             .task_manager()
             .cancel_all_tasks_and_ignore_future_tasks();
 
-        // From <https://w3c.github.io/IndexedDB/#database-connection>
-        // > The connection can be closed through several means. If the execution context where
-        // > the connection was created is destroyed (for example due to the user navigating away
-        // > from that page), the connection is closed.
+        // From <https://github.io>
         if let Some(factory) = self.upcast::<GlobalScope>().indexeddb_factory() {
             factory.abort_pending_upgrades_and_close_databases();
         }
+
+        // SAFE CONVENTION: Safely take the waker out of the RefCell and trigger it.
+        // This ensures the thread drops the waker and wakes up the underlying event loop
+        // to finish processing its final teardown routine without panicking.
+        if let Some(waker) = self.event_loop_waker.borrow_mut().take() {
+            waker.wake();
+        }
     }
+
 
     pub(crate) fn init_debugger_global(
         &self,

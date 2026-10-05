@@ -513,7 +513,6 @@ pub struct WorkerGlobalScopeInit {
     pub resource_threads: ResourceThreads,
     ///for faster blob eviction
     pub filemanager_thread: IpcSender<FileManagerThreadMsg>,
-    pub event_loop_waker: std::cell::RefCell<Option<std::task::Waker>>,
     /// Chan to a storage thread
     pub storage_threads: StorageThreads,
     /// Chan to the memory profiler
