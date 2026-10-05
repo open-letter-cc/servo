@@ -111,7 +111,6 @@ use crate::tasks::task::TaskCanceller;
 use crate::tasks::task_manager::TaskManager;
 use ipc_channel::ipc::IpcSender;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
-use servo_base::generic_channel::GenericSender;
 
 /// <https://html.spec.whatwg.org/multipage/#animation-frames>
 pub(crate) fn prepare_workerscope_init(
