@@ -11,12 +11,19 @@ name: Motor Controller
 on:
   # NOTE: kept in sync by hand with the `pull_request` list below. GitHub
   # Actions does not expand YAML anchors, so the duplication is unavoidable.
+  #
+  # `components/**`, not just `components/servo/**`: the payload is compiled from
+  # every component, so a patch anywhere in them changes what ships, and a
+  # change that ships must be the one that builds it. servoshell's manifest is
+  # listed because its default features decide the payload's feature set (the
+  # shim is built in the same invocation and inherits them; see the build step).
   push:
     paths:
       - "vendor/motor-controller/**"
       - "vendor/zdr-capi-shim/**"
       - "ffi/capi/**"
-      - "components/servo/**"
+      - "components/**"
+      - "ports/servoshell/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/motor-controller.yaml"
@@ -25,7 +32,8 @@ on:
       - "vendor/motor-controller/**"
       - "vendor/zdr-capi-shim/**"
       - "ffi/capi/**"
-      - "components/servo/**"
+      - "components/**"
+      - "ports/servoshell/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/motor-controller.yaml"
