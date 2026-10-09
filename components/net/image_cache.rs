@@ -257,6 +257,96 @@ impl std::fmt::Debug for VectorImageData {
     }
 }
 
+/// The size of the pixmap that rasterizing `svg_tree` at `requested_size` allocates:
+/// clamped to [`MAX_SVG_PIXMAP_DIMENSION`] on each axis, or the natural size if the
+/// requested one is not representable. `None` if the result is empty or too wide for
+/// `tiny_skia::Pixmap`.
+fn svg_pixmap_size(
+    svg_tree: &usvg::Tree,
+    requested_size: DeviceIntSize,
+) -> Option<tiny_skia::IntSize> {
+    let natural_size = svg_tree.size().to_int_size();
+    let pixmap_size = {
+        let width = requested_size
+            .width
+            .try_into()
+            .unwrap_or(0)
+            .min(MAX_SVG_PIXMAP_DIMENSION);
+        let height = requested_size
+            .height
+            .try_into()
+            .unwrap_or(0)
+            .min(MAX_SVG_PIXMAP_DIMENSION);
+        tiny_skia::IntSize::from_wh(width, height).unwrap_or(natural_size)
+    };
+
+    // Requirements from tiny_skia::Pixmap::new
+    if pixmap_size.width() == 0 ||
+        pixmap_size.width() > (i32::MAX / 4).try_into().unwrap() ||
+        pixmap_size.height() == 0
+    {
+        debug!(
+            "Asked for requested size {:?} which has zero size. Not returning image",
+            requested_size
+        );
+        return None;
+    }
+    Some(pixmap_size)
+}
+
+/// Rasterizes `vector_image` into a pixmap of `pixmap_size`, on the calling thread.
+///
+/// Some SVG documents, primarily ones created by fuzzers, can cause resvg to fail
+/// assertions and panic. We catch any panics in `resvg::render` here so that we don't
+/// crash the whole engine for such cases, and return `Err`.
+fn render_svg(
+    vector_image: &VectorImageData,
+    pixmap_size: tiny_skia::IntSize,
+) -> std::thread::Result<RasterImage> {
+    let natural_size = vector_image.svg_tree.size().to_int_size();
+    let transform = tiny_skia::Transform::from_scale(
+        pixmap_size.width() as f32 / natural_size.width() as f32,
+        pixmap_size.height() as f32 / natural_size.height() as f32,
+    );
+    let mut pixmap = tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height()).unwrap();
+
+    // We also need to set `SUPPRESS_ABORT_IN_PANIC_HOOK` for the duration of the call
+    // because servoshell registers a custom hook that intercepts the panic and crashes
+    // the process when run in hard_fail mode.
+    //
+    // `AssertUnwindSafe` should be safe here since callers do not use the `vector_image`
+    // again after a panic. This assumes `resvg::render` doesn't use internal global state
+    // that could become invalid after the panic.
+    SUPPRESS_ABORT_IN_PANIC_HOOK.set(true);
+    let resvg_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        resvg::render(&vector_image.svg_tree, transform, &mut pixmap.as_mut());
+
+        let bytes = pixmap.take();
+        let frame = ImageFrame {
+            delay: None,
+            byte_range: 0..bytes.len(),
+            width: pixmap_size.width(),
+            height: pixmap_size.height(),
+        };
+
+        RasterImage {
+            metadata: ImageMetadata {
+                width: pixmap_size.width(),
+                height: pixmap_size.height(),
+            },
+            format: PixelFormat::RGBA8,
+            frames: vec![frame],
+            bytes: Arc::new(bytes),
+            id: None,
+            cors_status: vector_image.cors_status,
+            is_opaque: false,
+            loop_count: None,
+        }
+    }));
+    SUPPRESS_ABORT_IN_PANIC_HOOK.set(false);
+    resvg_result
+}
+
 enum DecodedImage {
     Raster(RasterImage),
     Vector(VectorImageData),
@@ -1089,86 +1179,13 @@ impl ImageCache for ImageCacheImpl {
             return None;
         }
 
-        let natural_size = vector_image.svg_tree.size().to_int_size();
-        let tinyskia_requested_size = {
-            let width = requested_size
-                .width
-                .try_into()
-                .unwrap_or(0)
-                .min(MAX_SVG_PIXMAP_DIMENSION);
-            let height = requested_size
-                .height
-                .try_into()
-                .unwrap_or(0)
-                .min(MAX_SVG_PIXMAP_DIMENSION);
-            tiny_skia::IntSize::from_wh(width, height).unwrap_or(natural_size)
-        };
-
-        // Requirements from tiny_skia::Pixmap::new
-        if tinyskia_requested_size.width() == 0 ||
-            tinyskia_requested_size.width() > (i32::MAX / 4).try_into().unwrap() ||
-            tinyskia_requested_size.height() == 0
-        {
-            debug!(
-                "Asked for requested size {:?} which has zero size. Not returning image",
-                requested_size
-            );
-            return None;
-        }
+        let pixmap_size = svg_pixmap_size(&vector_image.svg_tree, requested_size)?;
 
         let store = self.store.clone();
         self.thread_pool.spawn(move || {
-            let transform = tiny_skia::Transform::from_scale(
-                tinyskia_requested_size.width() as f32 / natural_size.width() as f32,
-                tinyskia_requested_size.height() as f32 / natural_size.height() as f32,
-            );
-            let mut pixmap = tiny_skia::Pixmap::new(
-                tinyskia_requested_size.width(),
-                tinyskia_requested_size.height(),
-            )
-            .unwrap();
-
-            // Some SVG documents, primarily ones created by fuzzers, can cause resvg to fail
-            // assertions and panic. We catch any panics in `resvg::render` here so that we don't
-            // crash the whole engine for such cases. In case of a panic, the completion listeners
-            // added for this request will never get called.
-            //
-            // We also need to set `SUPPRESS_ABORT_IN_PANIC_HOOK` for the duration of the call
-            // because servoshell registers a custom hook that intercepts the panic and crashes
-            // the process when run in hard_fail mode.
-            //
-            // `AssertUnwindSafe` should be safe here since we will remove the `vector_image`
-            // from `store.vector_images` and won't use it again. This assumes `resvg::render`
-            // doesn't use internal global state that could become invalid after the panic.
-            SUPPRESS_ABORT_IN_PANIC_HOOK.set(true);
-            let resvg_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                resvg::render(&vector_image.svg_tree, transform, &mut pixmap.as_mut());
-
-                let bytes = pixmap.take();
-                let frame = ImageFrame {
-                    delay: None,
-                    byte_range: 0..bytes.len(),
-                    width: tinyskia_requested_size.width(),
-                    height: tinyskia_requested_size.height(),
-                };
-
-                RasterImage {
-                    metadata: ImageMetadata {
-                        width: tinyskia_requested_size.width(),
-                        height: tinyskia_requested_size.height(),
-                    },
-                    format: PixelFormat::RGBA8,
-                    frames: vec![frame],
-                    bytes: Arc::new(bytes),
-                    id: None,
-                    cors_status: vector_image.cors_status,
-                    is_opaque: false,
-                    loop_count: None,
-                }
-            }));
-            SUPPRESS_ABORT_IN_PANIC_HOOK.set(false);
-
-            match resvg_result {
+            // In case of a panic, the completion listeners added for this request will never
+            // get called.
+            match render_svg(&vector_image, pixmap_size) {
                 Ok(rasterized_image) => {
                     let mut store = store.lock();
                     store.load_image_with_keycache(PendingKey::Svg((
@@ -1198,6 +1215,43 @@ impl ImageCache for ImageCacheImpl {
             }
         });
         None
+    }
+
+    fn rasterize_vector_image_now(
+        &self,
+        image_id: PendingImageId,
+        requested_size: DeviceIntSize,
+    ) -> Option<RasterImage> {
+        // `svg_pixmap_size` falls back to the natural size for an empty request; a caller
+        // asking for pixels synchronously asked for this size and no other.
+        if requested_size.is_empty() {
+            return None;
+        }
+        let vector_image = {
+            let store = self.store.lock();
+            if let Some(result) = store
+                .rasterized_vector_images
+                .get(&(image_id, requested_size))
+                .and_then(|task| task.result.clone())
+            {
+                return Some(result);
+            }
+            store.vector_images.get(&image_id).cloned()?
+        };
+
+        // Rendered outside the lock, so that a large image does not hold up the cache's
+        // other users. Nothing is stored: the result has no WebRender key, and giving it one
+        // would mean waiting for the script thread, which is the thread calling this.
+        let pixmap_size = svg_pixmap_size(&vector_image.svg_tree, requested_size)?;
+        match render_svg(&vector_image, pixmap_size) {
+            Ok(rasterized_image) => Some(rasterized_image),
+            Err(_) => {
+                warn!("resvg panicked while rasterizing SVG image {image_id:?} at {requested_size:?}");
+                // As in `rasterize_vector_image`: never rasterize this image again.
+                self.store.lock().vector_images.remove(&image_id);
+                None
+            },
+        }
     }
 
     /// Add a new listener for the given pending image id. If the image is already present,

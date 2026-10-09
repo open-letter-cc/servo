@@ -228,6 +228,18 @@ pub trait ImageCache: Sync + Send {
         svg_id: Option<Uuid>,
     ) -> Option<RasterImage>;
 
+    /// Rasterizes the given `image_id` at the given `size` on the calling thread and returns
+    /// the pixels, reusing an earlier rasterization at that size if there is one. Unlike
+    /// [`ImageCache::rasterize_vector_image`], the result is not given a WebRender image key
+    /// and is not stored, so this never waits on the script thread. It is for callers that
+    /// need pixels synchronously, such as a 2D canvas drawing an SVG image. Returns `None`
+    /// if the image is unknown, `size` is empty, or rasterization fails.
+    fn rasterize_vector_image_now(
+        &self,
+        image_id: VectorImageId,
+        size: DeviceIntSize,
+    ) -> Option<RasterImage>;
+
     /// Adds a new listener to be notified once the given `image_id` has been rasterized at
     /// the given `size`. The listener will receive a `VectorImageRasterizationComplete`
     /// message on the given `sender`, even if the listener is called after rasterization

@@ -27,6 +27,7 @@ use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_url::ServoUrl;
 use servo_url::origin::MutableOrigin;
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
+use webrender_api::units::DeviceIntSize;
 
 use crate::dom::activation::Activatable;
 use crate::dom::bindings::codegen::Bindings::DOMRectBinding::DOMRect_Binding::DOMRectMethods;
@@ -160,11 +161,23 @@ impl HTMLImageElement {
         self.current_request.borrow().load_time
     }
 
-    /// Gets the copy of the raster image data.
+    /// Gets the copy of the raster image data. A vector image is rasterized at its
+    /// natural size, synchronously, as its callers (`drawImage`, `createPattern`,
+    /// `createImageBitmap`) need the pixels now.
     pub(crate) fn get_raster_image_data(&self) -> Option<Snapshot> {
-        let Some(raster_image) = self.image_data()?.as_raster_image() else {
-            warn!("Vector image is not supported as raster image source");
-            return None;
+        let raster_image = match self.image_data()? {
+            Image::Raster(raster_image) => raster_image,
+            Image::Vector(vector_image) => {
+                let size = DeviceIntSize::new(
+                    vector_image.metadata.width as i32,
+                    vector_image.metadata.height as i32,
+                );
+                Arc::new(
+                    self.owner_window()
+                        .image_cache()
+                        .rasterize_vector_image_now(vector_image.id, size)?,
+                )
+            },
         };
         Some(raster_image.as_snapshot())
     }
