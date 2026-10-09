@@ -109,8 +109,6 @@ use crate::runtime::job_queue::{MicrotaskRunnable, UserMicrotask, job_queue_micr
 use crate::runtime::script_runtime::{IntroductionType, Runtime, get_reports};
 use crate::tasks::task::TaskCanceller;
 use crate::tasks::task_manager::TaskManager;
-use ipc_channel::ipc::IpcSender;
-use net_traits::filemanager_thread::FileManagerThreadMsg;
 
 /// <https://html.spec.whatwg.org/multipage/#animation-frames>
 pub(crate) fn prepare_workerscope_init(
@@ -133,7 +131,6 @@ pub(crate) fn prepare_workerscope_init(
 
     WorkerGlobalScopeInit {
         resource_threads: global.resource_threads().clone(),
-        filemanager_thread: global.filemanager_thread().clone(),
         storage_threads: global.storage_threads().clone(),
         mem_profiler_chan: global.mem_profiler_chan().clone(),
         to_devtools_sender: global.devtools_chan().cloned(),
@@ -392,14 +389,6 @@ pub(crate) struct WorkerGlobalScope {
     /// <https://html.spec.whatwg.org/multipage/#concept-settings-object-module-map>
     #[ignore_malloc_size_of = "mozjs"]
     module_map: DomRefCell<HashMapTracedValues<ModuleRequest, ModuleStatus>>,
-    #[no_trace]
-    filemanager_handle: IpcSender<FileManagerThreadMsg>,
-    #[no_trace]
-    filemanager_tokens: DomRefCell<HashSet<Uuid>>,
-    #[no_trace]
-    #[ignore_malloc_size_of = "Waker is a standard library type that does not implement MallocSizeOf"]
-    event_loop_waker: RefCell<Option<std::task::Waker>>,
-
 }
 
 impl WorkerGlobalScope {
@@ -475,10 +464,6 @@ impl WorkerGlobalScope {
             origin: MutableOrigin::new(init.origin),
             font_context,
             module_map: Default::default(),
-            filemanager_handle: init.filemanager_thread,
-            filemanager_tokens: DomRefCell::new(HashSet::new()),
-            event_loop_waker: RefCell::default(),
-
         }
     }
 
@@ -1162,47 +1147,29 @@ impl WorkerGlobalScope {
 
     /// <https://html.spec.whatwg.org/multipage/#close-a-worker>
     pub(crate) fn close(&self) {
-        // 0. Drain or borrow the tokens to avoid keeping a borrow active during IPC sends
-        let tokens: Vec<_> = self.filemanager_tokens.borrow().iter().cloned().collect();
-
-        if !tokens.is_empty() {
-            // 2. Fetch the required ImmutableOrigin from the scope
-            let origin = self.upcast::<GlobalScope>().origin().immutable();
-
-            for token in tokens {
-                // 3. Create a channel to satisfy the GenericSender requirement of the Abort contract
-                let (tx, _rx) = ipc_channel::ipc::channel().unwrap();
-                
-                // 4. Transform the native IpcSender into a GenericSender using .into()
-                let _ = self.filemanager_handle.send(
-                    FileManagerThreadMsg::Abort(token, origin.clone(), tx.into())
-                );
-            }
-        }
         // Step 1. Discard any tasks that have been added to workerGlobal's relevant
         // agent's event loop's task queues.
+        //
+        // Worker rAF callbacks are stored outside the task queues.
         if let Some(dedicated) = self.downcast::<DedicatedWorkerGlobalScope>() {
             dedicated.clear_animation_frame_callbacks_and_unregister();
         }
 
-        // Step 2. Set workerGlobal's closing flag to true.
+        // Step 2. Set workerGlobal's closing flag to true. (This prevents any
+        // further tasks from being queued.)
         self.closing.store(true, Ordering::SeqCst);
         self.upcast::<GlobalScope>()
             .task_manager()
             .cancel_all_tasks_and_ignore_future_tasks();
 
+        // From <https://w3c.github.io/IndexedDB/#database-connection>
+        // > The connection can be closed through several means. If the execution context where
+        // > the connection was created is destroyed (for example due to the user navigating away
+        // > from that page), the connection is closed.
         if let Some(factory) = self.upcast::<GlobalScope>().indexeddb_factory() {
             factory.abort_pending_upgrades_and_close_databases();
         }
-
-        // Clean up the thread waker safely
-        if let Some(waker) = self.event_loop_waker.borrow_mut().take() {
-            waker.wake();
-        }
     }
-
-
-
 
     pub(crate) fn init_debugger_global(
         &self,
