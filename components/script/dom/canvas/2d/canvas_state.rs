@@ -20,7 +20,7 @@ use fonts::{
 };
 use icu_locale_core::subtags::Language;
 use js::context::{JSContext, NoGC};
-use net_traits::image_cache::{ImageCache, ImageResponse};
+use net_traits::image_cache::{Image, ImageCache, ImageResponse};
 use net_traits::request::CorsSettings;
 use pixels::{Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use script_bindings::cell::DomRefCell;
@@ -51,6 +51,7 @@ use style_traits::values::ToCss;
 use style_traits::{CssWriter, ParsingMode};
 use unicode_script::Script;
 use webrender_api::ImageKey;
+use webrender_api::units::DeviceIntSize;
 
 use crate::canvas_context::{CanvasContext, OffscreenRenderingContext, RenderingContext};
 use crate::conversions::Convert;
@@ -468,14 +469,20 @@ impl CanvasState {
         cors_setting: Option<CorsSettings>,
     ) -> Option<Snapshot> {
         let raster_image = match self.request_image_from_cache(url, cors_setting) {
-            ImageResponse::Loaded(image, _) => {
-                if let Some(image) = image.as_raster_image() {
-                    image
-                } else {
-                    // TODO: https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage
-                    warn!("Vector images are not supported as image source in canvas2d");
-                    return None;
-                }
+            ImageResponse::Loaded(image, _) => match image {
+                Image::Raster(raster_image) => raster_image,
+                // <https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage>
+                // A vector image is drawn at its natural size, so rasterize it at that size.
+                Image::Vector(vector_image) => {
+                    let size = DeviceIntSize::new(
+                        vector_image.metadata.width as i32,
+                        vector_image.metadata.height as i32,
+                    );
+                    Arc::new(
+                        self.image_cache
+                            .rasterize_vector_image_now(vector_image.id, size)?,
+                    )
+                },
             },
             ImageResponse::FailedToLoadOrDecode | ImageResponse::MetadataLoaded(_) => {
                 return None;
