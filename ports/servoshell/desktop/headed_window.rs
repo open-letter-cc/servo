@@ -1105,6 +1105,8 @@ impl PlatformWindow for HeadedWindow {
                 let offset = self.gui.borrow().toolbar_height();
                 self.add_dialog(webview_id, Dialog::new_context_menu(prompt, offset));
             },
+            // Never offered here; a page request has no user interface.
+            EmbedderControl::PageRequest(..) => {},
         }
     }
 

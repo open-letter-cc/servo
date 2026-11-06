@@ -9,8 +9,9 @@ use std::thread;
 
 use app_units::Au;
 use fonts_traits::{
-    FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef, LowercaseFontFamilyName,
-    SystemFontServiceMessage, SystemFontServiceProxySender,
+    FontData, FontDataAndIndex, FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef,
+    LocalFontIdentifier, LowercaseFontFamilyName, SystemFontServiceMessage,
+    SystemFontServiceProxySender,
 };
 use malloc_size_of::MallocSizeOf as MallocSizeOfTrait;
 use malloc_size_of_derive::MallocSizeOf;
@@ -79,6 +80,11 @@ pub struct SystemFontService {
     /// instance key for the instance. Once the free keys are exhausted, the
     /// [`SystemFontService`] will fetch a new batch.
     free_font_instance_keys: FxHashMap<PainterId, Vec<FontInstanceKey>>,
+
+    /// The bytes of local fonts that content processes have asked for, as shared
+    /// memory, so that a font is read from disk once and every process receives the
+    /// same segment. `None` records a font that could not be read.
+    local_font_data: HashMap<LocalFontIdentifier, Option<FontDataAndIndex>>,
 }
 
 impl SystemFontService {
@@ -101,6 +107,7 @@ impl SystemFontService {
                     generic_fonts: Default::default(),
                     free_font_keys: Default::default(),
                     free_font_instance_keys: Default::default(),
+                    local_font_data: Default::default(),
                 };
 
                 cache.refresh_local_families();
@@ -168,6 +175,9 @@ impl SystemFontService {
                 SystemFontServiceMessage::PrefetchFontKeys(painter_id) => {
                     self.fetch_font_keys_if_needed(painter_id);
                 },
+                SystemFontServiceMessage::GetFontData(identifier, result_sender) => {
+                    let _ = result_sender.send(self.get_local_font_data(identifier));
+                },
                 SystemFontServiceMessage::CollectMemoryReport(report_sender) => {
                     self.collect_memory_report(report_sender);
                 },
@@ -189,6 +199,27 @@ impl SystemFontService {
             }];
             report_sender.send(ProcessReports::new(reports));
         });
+    }
+
+    /// Read a local font's bytes, once, into shared memory. The mapping of the file
+    /// is turned into a shared-memory segment here rather than at every send, since
+    /// sending a memory-mapped [`FontData`] copies it each time.
+    #[servo_tracing::instrument(skip_all)]
+    fn get_local_font_data(
+        &mut self,
+        identifier: LocalFontIdentifier,
+    ) -> Option<FontDataAndIndex> {
+        self.local_font_data
+            .entry(identifier)
+            .or_insert_with_key(|identifier| {
+                identifier
+                    .font_data_and_index()
+                    .map(|FontDataAndIndex { data, index }| FontDataAndIndex {
+                        data: FontData::SharedMemory(data.as_ipc_shared_memory()),
+                        index,
+                    })
+            })
+            .clone()
     }
 
     #[servo_tracing::instrument(skip_all)]

@@ -17,7 +17,10 @@ use webrender_api::{
     FontInstanceFlags, FontInstanceKey, FontInstancePlatformOptions, FontKey, FontVariation,
 };
 
-use crate::{FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef};
+use crate::{
+    FontDataAndIndex, FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef,
+    LocalFontIdentifier,
+};
 
 /// Commands that the `FontContext` sends to the `SystemFontService`.
 #[derive(Debug, Deserialize, MallocSizeOf, Serialize)]
@@ -37,6 +40,11 @@ pub enum SystemFontServiceMessage {
         GenericSender<FontInstanceKey>,
     ),
     PrefetchFontKeys(PainterId),
+    /// Ask for the bytes of a local (system) font, so that a process which cannot open
+    /// font files itself can still instantiate the font. The reply is `None` if the
+    /// font cannot be read. The data is shared memory: one segment per font, mapped
+    /// once in each process that asks for it.
+    GetFontData(LocalFontIdentifier, GenericSender<Option<FontDataAndIndex>>),
     GetFontKey(PainterId, GenericSender<FontKey>),
     GetFontInstanceKey(PainterId, GenericSender<FontInstanceKey>),
     CollectMemoryReport(ReportsChan),
@@ -52,6 +60,7 @@ impl SystemFontServiceProxySender {
         SystemFontServiceProxy {
             sender: self.0.clone(),
             templates: Default::default(),
+            local_font_data: Default::default(),
         }
     }
 }
@@ -68,6 +77,9 @@ struct FontTemplateCacheKey {
 pub struct SystemFontServiceProxy {
     sender: GenericSender<SystemFontServiceMessage>,
     templates: RwLock<HashMap<FontTemplateCacheKey, Vec<FontTemplateRef>>>,
+    /// Bytes of local fonts fetched from the [`SystemFontService`], kept for the life
+    /// of the process so that each font is requested, and mapped, once.
+    local_font_data: RwLock<HashMap<LocalFontIdentifier, Option<FontDataAndIndex>>>,
 }
 
 impl SystemFontServiceProxy {
@@ -161,6 +173,41 @@ impl SystemFontServiceProxy {
         self.templates.write().insert(cache_key, templates.clone());
 
         templates
+    }
+
+    /// The bytes of a local font and the index of the face within them, fetched from
+    /// the [`SystemFontService`] and cached per process. `None` if the font cannot be
+    /// read, which is also cached, so an unreadable font is asked for once.
+    pub fn get_local_font_data(
+        &self,
+        identifier: &LocalFontIdentifier,
+    ) -> Option<FontDataAndIndex> {
+        if let Some(data) = self.local_font_data.read().get(identifier) {
+            return data.clone();
+        }
+
+        let (response_chan, response_port) =
+            generic_channel::channel().expect("failed to create IPC channel");
+        self.sender
+            .send(SystemFontServiceMessage::GetFontData(
+                identifier.clone(),
+                response_chan,
+            ))
+            .expect("failed to send message to system font service");
+        let Ok(data) = response_port.recv() else {
+            let font_thread_has_closed = self.sender.send(SystemFontServiceMessage::Ping).is_err();
+            assert!(
+                font_thread_has_closed,
+                "Failed to receive a response from live font cache"
+            );
+            panic!("SystemFontService has already exited.");
+        };
+
+        self.local_font_data
+            .write()
+            .entry(identifier.clone())
+            .or_insert(data)
+            .clone()
     }
 
     pub fn generate_font_key(&self, painter_id: PainterId) -> FontKey {

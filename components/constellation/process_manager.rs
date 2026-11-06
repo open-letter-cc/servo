@@ -15,7 +15,7 @@ pub enum Process {
 }
 
 impl Process {
-    fn pid(&self) -> u32 {
+    pub(crate) fn pid(&self) -> u32 {
         match self {
             Self::Unsandboxed(child) => child.id(),
             Self::Sandboxed(pid) => *pid,
@@ -64,6 +64,11 @@ impl ProcessManager {
     pub fn receiver_at(&self, index: usize) -> &ProcessReceiver {
         let (_, receiver) = &self.processes[index];
         receiver
+    }
+
+    pub fn pid_at(&self, index: usize) -> u32 {
+        let (process, _) = &self.processes[index];
+        process.pid()
     }
 
     #[servo_tracing::instrument(skip_all)]

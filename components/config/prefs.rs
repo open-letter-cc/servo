@@ -156,6 +156,10 @@ pub struct Preferences {
     pub dom_crypto_subtle_enabled: bool,
     pub dom_document_dblclick_timeout: i64,
     pub dom_document_dblclick_dist: i64,
+    /// Exposes `EmbedderRequest.send()`, which delivers bytes from page script to the
+    /// embedder as a page-request embedder control. Off by default: no document sees it
+    /// unless the embedder turns it on.
+    pub dom_embedder_request_enabled: bool,
     // feature: File and Directory Entries API | #45653 | Web/API/File_and_Directory_Entries_API
     pub dom_entries_api_enabled: bool,
     // feature: Document.execCommand | #25005 | Web/API/Document/execCommand
@@ -455,6 +459,7 @@ impl Preferences {
             dom_crypto_subtle_enabled: true,
             dom_document_dblclick_dist: 1,
             dom_document_dblclick_timeout: 300,
+            dom_embedder_request_enabled: false,
             dom_entries_api_enabled: false,
             dom_exec_command_enabled: false,
             dom_fontface_enabled: false,

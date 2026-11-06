@@ -88,12 +88,9 @@ fn storage_dir() -> Option<PathBuf> {
         disk_storage_path.is_empty(),
     ) {
         (false, false) => Some(disk_storage_path.into()),
-        (true, true) => {
-            let tmp_dir = tempfile::tempdir().unwrap();
-            let mut path = tmp_dir.path().to_path_buf();
-            path.set_file_name("cache.sqlite3");
-            Some(path)
-        },
+        // Temporary storage keeps the cache in memory, so that nothing outlives the
+        // process: SQLite opens the name ":memory:" as a private in-memory database.
+        (true, true) => Some(PathBuf::from(":memory:")),
         (true, false) => {
             error!(
                 "Temporary storage cannot be set with explicit disk storage path. Disabling http_disk_cache"

@@ -1,0 +1,866 @@
+# Copyright 2026 Open Letter, Inc.
+# SPDX-License-Identifier: LicenseRef-OpenLetter-Tools
+# Produces a Windows libservo DLL that an external embedder can download and
+# drop into its own tree, plus a check that the motor-controller seam still
+# builds against a real libservo.
+#
+# Deliberately separate from windows.yml: that workflow is upstream's
+# mach-driven servoshell/nightly pipeline. This one exists only to hand a
+# built engine to an embedder, so it stays plain `cargo` and does not share
+# windows.yml's self-hosted-runner selection.
+name: Motor Controller
+# The variant is in the run name as well as the artifact name: the two payloads
+# are the same three files and cannot be told apart by inspecting them.
+run-name: >-
+  Motor Controller (${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }})
+
+on:
+  # NOTE: kept in sync by hand with the `pull_request` list below. GitHub
+  # Actions does not expand YAML anchors, so the duplication is unavoidable.
+  #
+  # `components/**`, not just `components/servo/**`: the payload is compiled from
+  # every component, so a patch anywhere in them changes what ships, and a
+  # change that ships must be the one that builds it. servoshell's manifest is
+  # listed because its default features decide the payload's feature set (the
+  # shim is built in the same invocation and inherits them; see the build step).
+  push:
+    branches:
+      - "**"
+    # Release tags reach the FreeBSD rung, which runs on dispatch and tags only.
+    # paths filters are not evaluated for tag pushes, so the tag filter is what
+    # admits them.
+    tags:
+      - "capi-*"
+    paths:
+      - "vendor/motor-controller/**"
+      - "ffi/capi-full/**"
+      - "ffi/capi/**"
+      - "components/**"
+      - "ports/servoshell/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/motor-controller.yaml"
+      - ".github/capi-exports/**"
+      - "tests/capi/**"
+  pull_request:
+    paths:
+      - "vendor/motor-controller/**"
+      - "ffi/capi-full/**"
+      - "ffi/capi/**"
+      - "components/**"
+      - "ports/servoshell/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/motor-controller.yaml"
+      - ".github/capi-exports/**"
+      - "tests/capi/**"
+  # So the DLL can be rebuilt without touching source.
+  workflow_dispatch:
+    inputs:
+      singleprocess:
+        description: >-
+          Build WITHOUT upstream's multiprocess feature. Off for every push, so
+          the payload a push produces is always the multiprocess one; the
+          single-process payload exists only when dispatched by hand.
+        type: boolean
+        default: false
+      release:
+        description: >-
+          Also publish the payload as a GitHub release tagged after this commit.
+          Off for every push: a release is permanent and a push is not, so this
+          is only ever asked for deliberately.
+        type: boolean
+        default: false
+      android:
+        description: >-
+          Also climb to the Android rung (build and export gate only, no tests)
+          once the macOS rungs are green. Off until the C suite has a host-side
+          harness for a device or emulator.
+        type: boolean
+        default: false
+      windows:
+        description: >-
+          Also build the Windows payload. On for every push and by default; a
+          dispatch that only wants the other rungs can turn it off, since the
+          Windows job is not a rung and nothing below depends on it.
+        type: boolean
+        default: true
+      ladder:
+        description: >-
+          Climb the ladder, from the `start-at` rung up. On for every push and
+          by default; off for a dispatch that only wants the Windows job.
+        type: boolean
+        default: true
+      start-at:
+        description: >-
+          The rung the ladder starts at. Only for picking up a tree whose rungs
+          below that one are already green; their gates are not re-checked.
+          `freebsd` also starts Android when `android` is on, since both sit
+          below the Intel rung; `android` starts that rung alone.
+        type: choice
+        options: [linux, macos-arm64, macos-intel, freebsd, android]
+        default: linux
+
+# The single-process variant is keyed separately, so dispatching one does not
+# cancel the push build of the default (multiprocess) payload. Without that they share a group
+# and the second to start kills the first.
+concurrency:
+  group: motor-controller-${{ github.ref }}-${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Windows libservo DLL
+    runs-on: windows-latest
+    # Every push; a dispatch can leave it out (see the `windows` input).
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.windows }}
+    env:
+      # One target dir for every cargo invocation in this job. vendor/motor-controller
+      # is in the root workspace's `exclude` list, so it is its own workspace and
+      # would otherwise build libservo a second time into its own target/. Sharing
+      # the dir also keeps the artifact path literally `target/release/`.
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
+      # clang_sys searches the msys path before Program Files\LLVM.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # What `mach build` sets on Windows; raw cargo does not get it for free.
+      CC: clang-cl.exe
+      CXX: clang-cl.exe
+      RUSTUP_WINDOWS_PATH_ADD_BIN: 1
+    # `contents: write` is only needed by the release step, which is gated behind
+    # an explicit dispatch input. Declared here because the default token is
+    # read-only when the repository is configured that way, and a release that
+    # fails on permissions after an hour of building is an expensive way to find
+    # that out.
+    permissions:
+      contents: write
+    # A cold release build of libservo (SpiderMonkey + ANGLE) plus a second
+    # feature-distinct build for motor-controller does not fit in the default
+    # timeout.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      # Workaround for https://github.com/actions/runner-images/issues/10001
+      - name: Upgrade llvm
+        run: choco upgrade llvm
+
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+
+      - name: Bootstrap
+        run: |
+          .\mach fetch
+          .\mach bootstrap-gstreamer
+
+      - name: Put GStreamer on PATH
+        # mach installs GStreamer under $CARGO_TARGET_DIR/dependencies; raw cargo
+        # finds its pkg-config only if that bin dir is on PATH.
+        run: |
+          $gst = "$env:CARGO_TARGET_DIR\dependencies\gstreamer\1.0\msvc_X86_64"
+          "$gst\bin" >> $env:GITHUB_PATH
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gst" >> $env:GITHUB_ENV
+
+      # The module is under its own licence. Fails on any MPL text inside it,
+      # or on a source file without the module's header, before anything builds.
+      - name: Check the module's licence boundary
+        shell: bash
+        run: bash vendor/motor-controller/check-licence.sh
+
+      # Cheap, and it fails in seconds if the default-feature (StubWebView-only)
+      # build has regressed - before spending hours on libservo.
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+
+      # The vendored ipc-channel's receiver-set tests, including the regression
+      # test for the Windows teardown race its one patch fixes (a host abort on
+      # engine shutdown after a content process has exited). A minute, and only
+      # meaningful on this runner: the race is in the Windows backend.
+      - name: Test the patched IPC receiver set (Windows backend)
+        working-directory: vendor/motor-controller
+        run: cargo test -p ipc-channel --lib receiver_set
+
+      # NOTE: nothing in this tree builds a `servo.dll`. libservo is an rlib and
+      # `-p servoshell` is an .exe; the cdylibs are ffi/capi (which cargo names
+      # servo_capi.dll) and ffi/capi-full (servo_capi_full.dll, renamed
+      # below).
+      #
+      # WHY THE SHIM AND NOT ffi/capi: servo_capi.dll exports thirty of the
+      # forty-two entry points a single-window embedder needs. The twelve it is
+      # missing - native rendering context, input, scroll, focus, resize, HiDPI -
+      # cannot be added by a crate that merely links to ffi/capi, because a
+      # cdylib is not linkable from Rust and the internals they need are
+      # `pub(crate)`. ffi/capi-full therefore *includes* ffi/capi's own
+      # lib.rs and adds the twelve, so servo_capi_full.dll is a strict superset
+      # of servo_capi.dll built from the same source. See that crate's README.
+      #
+      # The shim and servoshell are built in one invocation on purpose: separate
+      # invocations resolve different libservo feature sets and would each
+      # compile SpiderMonkey again. `-p servo-capi` is deliberately NOT in this
+      # list - the shim compiles every line of it already, so building it too
+      # would only add a second multi-minute cdylib link of the same code.
+      #
+      # Multiprocess is the default payload: every push builds with it on. The
+      # feature is enabled on the shim rather than globally: `--features
+      # multiprocess` in a multi-package build would try to apply it to
+      # servoshell too, which does not declare it. The single-process payload,
+      # dispatched by hand, resolves a different libservo feature set, so it
+      # recompiles SpiderMonkey rather than reusing the push build's cache.
+      - name: Build libservo C ABI DLL and servoshell (release)
+        run: cargo build -p servo-capi-full -p servoshell --release ${{ !inputs.singleprocess && '--features servo-capi-full/multiprocess' || '' }}
+
+      - name: Stage servo.dll
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          Copy-Item "$rel\servo_capi_full.dll" "$rel\servo.dll" -Force
+
+          # mozangle's build script emits ANGLE's pair under
+          # `<profile>/build/mozangle-<hash>/out`, and nothing in cargo moves
+          # them next to the other artifacts. `mach build` copies them itself
+          # (copy_windows_dlls_to_build_directory in
+          # python/servo/build_commands.py), as does tests/capi/build.rs; this
+          # job runs raw cargo, so it has to do the same copy. Several
+          # `mozangle-*` directories can exist when dependents resolve
+          # different feature sets - they all build the same ANGLE, so take
+          # the most recent.
+          foreach ($dll in "libEGL.dll", "libGLESv2.dll") {
+            $built = Get-ChildItem "$rel\build" -Filter $dll -Recurse -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+            if (-not $built) {
+              Write-Host "::error::$dll was not built under $rel\build"
+              exit 1
+            }
+            Copy-Item $built.FullName "$rel\$dll" -Force
+          }
+
+          Get-ChildItem "$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll" |
+            Select-Object Name, Length
+
+      # The gate this workflow exists to hold. An embedder that loads a payload
+      # exporting only thirty of these can open a page and take a screenshot of
+      # it, and can do nothing else with it - no clicking, no typing, no
+      # scrolling, no resize. That failure shows up as a dead viewport at
+      # runtime, so it is worth catching here instead.
+      #
+      # llvm-readobj rather than dumpbin: LLVM is already installed and on a
+      # known path for this job, whereas dumpbin needs a Visual Studio developer
+      # environment to be located first. `dumpbin /exports servo.dll` lists the
+      # same names.
+      - name: Check the export surface
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $readobj = "$env:LIBCLANG_PATH\llvm-readobj.exe"
+
+          # -CaseSensitive matters: Stylo links five `Servo_NumericType_*`
+          # exports into this same DLL, and Select-String matches
+          # case-insensitively by default. Without the flag the reported count is
+          # five higher than the capi surface, which both misreports the total and
+          # slackens the floor below by five.
+          $exports = & $readobj --coff-exports "$rel\servo.dll" |
+            Select-String -CaseSensitive -Pattern '^\s*Name:\s*(servo_\w+)\s*$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value } |
+            Sort-Object -Unique
+
+          Write-Host "servo.dll exports $($exports.Count) servo_* symbols"
+
+          # A count cannot say WHICH export went missing, so a payload that clears
+          # the floor while lacking a name fails on the embedder's side at runtime
+          # rather than here - the wrong end to find out. Hence names, one by one.
+          #
+          # The embedder resolves in two classes, and they are not interchangeable:
+          #
+          #   required - absence fails the embedder's library load outright. No
+          #              viewport, nothing runs. Naming these is pure correctness:
+          #              absence is unconditionally fatal and there is no policy in
+          #              the decision.
+          #   optional - resolved if present, skipped if absent, so an OLDER payload
+          #              still loads. Naming one is a PROMISE, not a check: from then
+          #              on this fork has committed to shipping it forever, and the
+          #              backward tolerance the optional class exists to provide is
+          #              given up. Add here deliberately, never by reflex.
+
+          # The names live in .github/capi-exports/ so every platform's gate reads
+          # the same lists; see the README there for what each class means.
+          function Read-Names($file) {
+            Get-Content "$env:GITHUB_WORKSPACE\.github\capi-exports\$file" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -and -not $_.StartsWith('#') }
+          }
+          $required = @(Read-Names 'required.txt')
+          $optional = @(Read-Names 'optional.txt')
+
+          $gated = $required + $optional
+          $missingRequired = $required | Where-Object { $exports -notcontains $_ }
+          $missingOptional = $optional | Where-Object { $exports -notcontains $_ }
+
+          if ($missingRequired) {
+            Write-Host "::error::servo.dll is missing $($missingRequired.Count) REQUIRED symbol(s); the embedder's library load fails outright: $($missingRequired -join ', ')"
+          }
+          if ($missingOptional) {
+            Write-Host "::error::servo.dll is missing $($missingOptional.Count) promised optional symbol(s): $($missingOptional -join ', ')"
+          }
+          if ($missingRequired -or $missingOptional) { exit 1 }
+
+          # Sequencing tripwire.
+          #
+          # A symbol cannot be gated before it exists - naming one that does not
+          # would fail this job on every run until it lands, including the branch
+          # that adds it. So a planned-but-unimplemented entry point cannot be
+          # named in advance, which leaves a hole: the branch that implements one
+          # ships it without ever adding it above, this gate stays green, and a
+          # payload that still cannot display anything passes.
+          #
+          # This closes the hole from the other side. If a planned symbol appears
+          # in the DLL and has not been classified above, fail and say so. The
+          # check is inert until the symbol ships, and the commit that ships it is
+          # then the commit that has to classify it.
+          # Both entries below are now implemented and classified as optional
+          # above, so this check is satisfied by them rather than inert. Keep them
+          # listed: the check costs nothing and it is the record of which symbols
+          # were promised before they existed. Add future planned entry points
+          # here so the same protection covers them.
+          #
+          # servo_rendering_context_make_current is deliberately NOT listed. It is
+          # exported and required by the paint/present sequence - neither paint nor
+          # present binds the context, so an embedder that skips it presents an
+          # unbound surface - but the embedder's binding does not declare it yet.
+          # Gating it would promise a symbol nobody resolves. Add it to $optional
+          # when the binding picks it up.
+          $planned = @(Read-Names 'planned.txt')
+          $ungated = $planned | Where-Object {
+            ($exports -contains $_) -and ($gated -notcontains $_)
+          }
+          if ($ungated) {
+            $names = $ungated -join ', '
+            Write-Host "::error::servo.dll exports $($ungated.Count) planned symbol(s) this gate does not check: $names. Add each to the required or optional list in the same commit that implements it - a payload can otherwise pass this job and still display nothing."
+            exit 1
+          }
+
+          # 42 is what a single-window embedder binds: thirty required plus twelve
+          # of the optional set. It is a floor, not the current surface - additive
+          # growth must not fail this job - and raising it is a policy call about
+          # deliberate removals rather than a correctness fix, so it stays put.
+          #
+          # With all thirty required symbols and thirteen optional ones now checked
+          # by name above, this is a backstop rather than the primary check: it
+          # catches wholesale collapse in the twenty-two exports nobody binds,
+          # which names cannot cover because no list declares them.
+          if ($exports.Count -lt 42) {
+            Write-Host "::error::servo.dll exports only $($exports.Count) servo_* symbols, expected at least 42"
+            exit 1
+          }
+
+          $exports | ForEach-Object { Write-Host "  $_" }
+
+      # Provenance for the payload. The three DLLs must be dropped into an
+      # embedder's tree together, from this one run: mixing a servo.dll from one
+      # run with ANGLE from another is a silently skewed engine. Recording the
+      # hashes and the commit here is what lets someone check later that they
+      # did not do that.
+      - name: Record SHA-256s
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $files = "servo.dll", "libEGL.dll", "libGLESv2.dll"
+
+          $rows = $files | ForEach-Object {
+            $hash = (Get-FileHash "$rel\$_" -Algorithm SHA256).Hash.ToLower()
+            Write-Host "$hash  $_"
+            [pscustomobject]@{ File = $_; 'SHA-256' = $hash }
+          }
+
+          "## libservo-windows-dll-${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }}" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Commit ``$env:GITHUB_SHA``, run ``$env:GITHUB_RUN_ID``. All three files are from this run; do not mix them with files from another." >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| File | SHA-256 |" >> $env:GITHUB_STEP_SUMMARY
+          "| :--- | :--- |" >> $env:GITHUB_STEP_SUMMARY
+          $rows | ForEach-Object { "| ``$($_.File)`` | ``$($_.'SHA-256')`` |" >> $env:GITHUB_STEP_SUMMARY }
+
+      # Both variants carry their name, the default one included. They are the
+      # same three files and differ only in a feature that changes whether
+      # content runs in this process, which is not visible by inspecting them;
+      # an unsuffixed name is how the wrong one gets staged.
+      #
+      # resources/ travels in the same artifact so it can be pinned with the
+      # DLLs it was built beside. The engine bakes these resources in, so the
+      # copy is the record of what was compiled in, not something it loads.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libservo-windows-dll-${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }}
+          # The three DLLs, all from this run, plus resources/. ANGLE's pair is not
+          # optional: servo.dll needs it at runtime on Windows (see
+          # ffi/capi/Cargo.toml), and surfman `LoadLibrary`s it by name when the
+          # first rendering context is created, so it has to travel with the
+          # engine.
+          path: |
+            target/release/servo.dll
+            target/release/libEGL.dll
+            target/release/libGLESv2.dll
+            resources/
+          if-no-files-found: error
+          retention-days: 30
+
+      # Only on an explicit dispatch. Deliberately after the artifact upload, so
+      # that a failure to publish still leaves the payload downloadable, and before
+      # the seam build for the same reason that step is last.
+      #
+      # The tag names the commit rather than a version: this payload is identified
+      # by what built it, and the engine's own crate version says nothing about the
+      # C ABI, which is what an embedder actually binds against. The ABI version and
+      # the feature set are recorded in the body instead, since the three files are
+      # indistinguishable from the ones built with different features.
+      - name: Publish GitHub release
+        if: ${{ inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rel = "$env:CARGO_TARGET_DIR\release"
+          $suffix = if ("${{ inputs.singleprocess }}" -eq "true") { "-singleprocess" } else { "-multiprocess" }
+          $tag = "capi-$($env:GITHUB_SHA.Substring(0,11))$suffix"
+
+          $files = @("$rel\servo.dll", "$rel\libEGL.dll", "$rel\libGLESv2.dll")
+          Get-FileHash -Algorithm SHA256 $files |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding utf8 "$rel\SHA256SUMS"
+
+          $notes = @"
+          Windows libservo C ABI payload built from ``$env:GITHUB_SHA``.
+
+          | | |
+          | :--- | :--- |
+          | commit | ``$env:GITHUB_SHA`` |
+          | C ABI version | reported by ``servo_capi_abi_version()`` |
+          | multiprocess feature | ${{ inputs.singleprocess && 'off' || 'on' }} |
+          | workflow run | $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID |
+
+          Load ``servo.dll`` with ``libEGL.dll`` and ``libGLESv2.dll`` beside it; surfman
+          loads ANGLE by name when the first rendering context is created, so all three
+          must travel together. ``servo_capi_build_features()`` reports which feature set
+          this payload was built with.
+
+          The matching ``servo_capi.h`` is not attached: it is produced by ``cargo-c``,
+          which this job does not run, and generating it would mean a second cdylib link
+          of the same code.
+
+          Licensed under MPL-2.0. Source is this repository at the commit above.
+          "@
+          $notes = $notes -replace '(?m)^          ', ''
+          Set-Content -Encoding utf8 "$env:RUNNER_TEMP\notes.md" $notes
+
+          gh release create $tag $files "$rel\SHA256SUMS" `
+            --target $env:GITHUB_SHA `
+            --title $tag `
+            --notes-file "$env:RUNNER_TEMP\notes.md"
+
+      # Hang containment, against a real content process: an unrelated webview
+      # must still load while another's content process is stuck in an infinite
+      # loop. Only meaningful with the multiprocess feature, so it runs with the
+      # default payload and is skipped for the single-process one.
+      #
+      # After the upload, so a failure here cannot cost the run its artifact.
+      # It is not free: `cargo cinstall` (tests/capi/build.rs) builds servo-capi
+      # into its own target/cinstall dir, which does not share this job's cache.
+      - name: Install cargo-c
+        if: ${{ !inputs.singleprocess }}
+        run: cargo install cargo-c --locked
+      - name: Test hang containment (multiprocess)
+        if: ${{ !inputs.singleprocess }}
+        run: cargo test -p servo-capi-tests --features multiprocess --test multiprocess_containment
+
+      # Last, so a failure here cannot cost the run its DLL artifact.
+      - name: Build motor-controller against real libservo (release)
+        working-directory: vendor/motor-controller
+        run: cargo build -p motor-controller --features servo-backend --release
+
+  # ---------------------------------------------------------------------------
+  # The platform ladder. Each rung `needs` the one before it, so within a run a
+  # payload is only built for a platform once the previous platform's gate is
+  # green, and a red rung stops the climb there. The Windows job is not a rung:
+  # it is the shipped payload and runs regardless.
+  #
+  # Every rung uses the same composite action for build, stage, gate, digest,
+  # upload and tests, so the only things a rung states are its runner, its
+  # bootstrap, its library extension and which of the sandbox and a virtual X
+  # server it needs.
+  # ---------------------------------------------------------------------------
+
+  # Rung 1: Linux x86-64. The first build of the capi crates, the FreeType font
+  # arm and the non-Windows stubs of the native and shared-surface entry points
+  # off Windows. No ANGLE: surfman uses the system EGL/GL, so the payload is the
+  # one library plus resources/. No GPU: the C suite runs on the software
+  # rendering context under a virtual X server, and the display check is a
+  # frame read back through servo_rendering_context_read_frame.
+  build-linux:
+    name: Linux x86-64 libservo shared object
+    runs-on: ubuntu-22.04
+    # Every push; a dispatch can leave the whole ladder out (see the `ladder`
+    # input) or start it higher up (`start-at`). The rungs above this one
+    # `need` it, so leaving the ladder out skips them too.
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.ladder && inputs.start-at == 'linux') }}
+    timeout-minutes: 350
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      # What upstream's linux.yml sets for bindgen on this runner image.
+      LIBCLANG_PATH: /usr/lib/llvm-14/lib
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+      # mach's bootstrap installs the apt packages upstream builds with
+      # (GStreamer, fontconfig, FreeType, X11 headers). xvfb is for the tests.
+      - name: Bootstrap
+        run: |
+          sudo apt update
+          ./mach bootstrap --skip-lints
+          sudo apt install -y xvfb
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+      - uses: ./.github/actions/capi-unix-payload
+        with:
+          platform: linux-x64
+          lib-ext: so
+          singleprocess: ${{ inputs.singleprocess && 'true' || 'false' }}
+          xvfb: "true"
+
+  # Rung 2: Linux arm64. Nothing platform-new; the same job on an arm64 runner.
+  # Upstream has no content-process sandbox on arm64 Linux (the profile arm
+  # exits, the spawn arm is the unsandboxed one), so this payload is
+  # multiprocess without a sandbox, and the job's name says so.
+  build-linux-arm64:
+    name: Linux arm64 libservo shared object (multiprocess, no sandbox, as upstream)
+    needs: build-linux
+    # Skipped with its rung below (a skipped `needs` skips this one too).
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 350
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      LIBCLANG_PATH: /usr/lib/llvm-14/lib
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+      - name: Bootstrap
+        run: |
+          sudo apt update
+          ./mach bootstrap --skip-lints
+          sudo apt install -y xvfb
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+      - uses: ./.github/actions/capi-unix-payload
+        with:
+          platform: linux-arm64
+          lib-ext: so
+          singleprocess: ${{ inputs.singleprocess && 'true' || 'false' }}
+          xvfb: "true"
+
+  # Rung 3: macOS on Apple Silicon, sandbox on. This is the rung that proves
+  # the arm64 macOS sandbox arms: the spawn, the child's activation and the
+  # servo crate's gaol dependency all select the Seatbelt path here, and the C
+  # suite's containment test runs its content processes sandboxed. It is also
+  # the first compile of the macOS font arm. The Intel build is the secondary
+  # rung after it.
+  build-macos-arm64:
+    name: macOS Apple Silicon libservo dylib (multiprocess, sandbox on)
+    needs: build-linux-arm64
+    # Runs when the Linux rungs are green, or when a dispatch starts the ladder
+    # here (`start-at`). Spelled out because `!cancelled()` drops the implicit
+    # `success()` that would otherwise skip this job behind a skipped `needs`.
+    if: >-
+      ${{ !cancelled() && (
+            needs.build-linux-arm64.result == 'success'
+            || (github.event_name == 'workflow_dispatch' && inputs.ladder && inputs.start-at == 'macos-arm64')
+          ) }}
+    runs-on: macos-15
+    timeout-minutes: 350
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+      - name: Bootstrap
+        run: ./mach bootstrap --skip-lints
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+      - uses: ./.github/actions/capi-unix-payload
+        with:
+          platform: macos-arm64
+          lib-ext: dylib
+          singleprocess: ${{ inputs.singleprocess && 'true' || 'false' }}
+          sandbox: ${{ !inputs.singleprocess && 'true' || 'false' }}
+
+  # Rung 4: macOS on Intel, the secondary. Same job on the Intel runner image;
+  # Intel Macs took the sandboxed path before the arm64 fix and still do.
+  build-macos-intel:
+    name: macOS Intel libservo dylib (multiprocess, sandbox on)
+    needs: build-macos-arm64
+    # Asks about the rung above only, or starts here (`start-at`). A job with
+    # no `if` gets `success()`, which GitHub evaluates over every job upstream
+    # of this one, not just the direct `needs`: with the Linux rungs left out
+    # by a dispatch, this job was skipped although Apple Silicon had passed
+    # (run 42102536801).
+    if: >-
+      ${{ !cancelled() && (
+            needs.build-macos-arm64.result == 'success'
+            || (github.event_name == 'workflow_dispatch' && inputs.ladder && inputs.start-at == 'macos-intel')
+          ) }}
+    runs-on: macos-15-intel
+    timeout-minutes: 350
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+      - name: Bootstrap
+        run: ./mach bootstrap --skip-lints
+      - name: Test motor-controller (default features, no engine)
+        working-directory: vendor/motor-controller
+        run: cargo test
+      - uses: ./.github/actions/capi-unix-payload
+        with:
+          platform: macos-x64
+          lib-ext: dylib
+          singleprocess: ${{ inputs.singleprocess && 'true' || 'false' }}
+          sandbox: ${{ !inputs.singleprocess && 'true' || 'false' }}
+
+  # Rung 5: FreeBSD x86-64, a release gate rather than a push gate. There is
+  # no FreeBSD runner image, so the build runs inside a FreeBSD virtual machine
+  # on a Linux runner, and a cold libservo build there takes most of a job's
+  # allowance; it runs on dispatch and on release tags only. No sandbox arm is
+  # needed: gaol's Capsicum backend accepts the generic Unix profile and the
+  # child calls cap_enter, so the C suite runs with the sandbox on and the
+  # containment test is the proof that a content process still serves pages
+  # after entering capability mode.
+  #
+  # mach does not bootstrap FreeBSD, so the packages are named here. The list
+  # mirrors what upstream's Linux bootstrap installs.
+  build-freebsd:
+    name: FreeBSD x86-64 libservo shared object (multiprocess, sandbox on; dispatch and tags)
+    needs: build-macos-intel
+    # Direct rung only, for the reason given on the Intel job; or starts here.
+    if: >-
+      ${{ !cancelled() && (
+            needs.build-macos-intel.result == 'success'
+            || (github.event_name == 'workflow_dispatch' && inputs.ladder && inputs.start-at == 'freebsd')
+          )
+          && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Build, gate and test in a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          mem: 10240
+          cpu: 4
+          sync: rsync
+          # The VM sees the checkout at the same path. The build goes to /tmp so
+          # only the staged payload is copied back, not the target dir.
+          copyback: true
+          envs: 'GITHUB_SHA GITHUB_RUN_ID GITHUB_STEP_SUMMARY'
+          # No `openssl` port. Nothing in the tree builds openssl-sys, and the
+          # port creates an empty /usr/local/openssl/certs, which cargo's own
+          # statically linked OpenSSL then takes as its trust store: cargo 1.97
+          # finds certificates through openssl-probe 0.1.6, whose search order
+          # reaches /usr/local/openssl before /etc/ssl, after which every git
+          # fetch fails with "the SSL certificate is invalid". `ca_root_nss`
+          # provides the bundle file the same probe accepts regardless of which
+          # directory it matched, so no other port can shadow the base store
+          # either. Both confirmed in a VM (run 42138775801).
+          prepare: |
+            pkg install -y bash git curl python3 gmake cmake ninja pkgconf llvm19 \
+              gstreamer1 gstreamer1-plugins gstreamer1-plugins-good gstreamer1-plugins-bad \
+              fontconfig freetype2 harfbuzz mesa-libs mesa-dri libX11 libXext libXrender \
+              libXrandr libXcursor libXi libxkbcommon wayland dbus libffi ca_root_nss \
+              gettext-runtime nasm perl5 autoconf automake libtool m4 xorg-vfbserver xauth
+          run: |
+            set -e
+            export HOME=/root
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            . "$HOME/.cargo/env"
+            # The checkout is rsynced into the VM and owned by a different user
+            # than the one running this script, so git and cargo's gitoxide treat
+            # it as untrusted and cap the memory for reading its index below what
+            # Servo's index needs ("Index data would require more memory than can
+            # be reserved", run 42145074076). Trust it for this process only.
+            export GIT_CONFIG_COUNT=2
+            export GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+            export GIT_CONFIG_KEY_1=gitoxide.objects.allocLimitIfReducedTrust GIT_CONFIG_VALUE_1=0
+            export CARGO_TARGET_DIR=/tmp/target
+            export LIBCLANG_PATH=/usr/local/llvm19/lib
+            # fontconfig.pc requires freetype2, whose private requirements name
+            # bzip2; the VM has bzip2 only as a base library with no .pc file, so
+            # the fontconfig-sys build script's pkg-config query fails without one.
+            mkdir -p /tmp/pkgconfig
+            {
+              echo 'Name: bzip2'
+              echo 'Description: bzip2 from the FreeBSD base system'
+              echo 'Version: 1.0.8'
+              echo 'Libs: -lbz2'
+            } > /tmp/pkgconfig/bzip2.pc
+            export PKG_CONFIG_PATH="/tmp/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            export PATH="/usr/local/llvm19/bin:$PATH"
+            rustup show active-toolchain || true
+
+            (cd vendor/motor-controller && cargo test)
+
+            cargo build -p servo-capi-full -p servoshell --release --features servo-capi-full/multiprocess
+            rel=$CARGO_TARGET_DIR/release
+            mkdir -p payload
+            cp "$rel/libservo_capi_full.so" payload/libservo.so
+            bash .github/capi-exports/check.sh payload/libservo.so 42
+            hash=$(sha256 -q payload/libservo.so)
+            echo "$hash  libservo.so"
+            printf '## libservo-freebsd-x64-so-multiprocess\n\nCommit `%s`, run `%s`.\n\n| File | SHA-256 |\n| :--- | :--- |\n| `libservo.so` | `%s` |\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$hash" >> payload/summary.md
+
+            cargo test -p servo-capi --release --features multiprocess
+            cargo install cargo-c --locked
+            Xvfb :99 -screen 0 1280x1024x24 >/dev/null 2>&1 &
+            export DISPLAY=:99
+            SERVO_CAPI_TEST_SANDBOX=1 cargo test -p servo-capi-tests --features multiprocess
+
+            (cd vendor/motor-controller && cargo build -p motor-controller --features servo-backend --release)
+      - name: Record SHA-256
+        run: cat payload/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libservo-freebsd-x64-so-multiprocess
+          path: |
+            payload/libservo.so
+            resources/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Rung 6: Android arm64, last of the asked. A cross build through mach's
+  # NDK environment, gated on the export surface. The C suite cannot run here
+  # until it has a host-side harness that drives the tests on a device or
+  # emulator, so this rung is build-and-gate only and is dispatched by hand
+  # until that harness lands.
+  build-android:
+    name: Android arm64 libservo shared object (build and gate only; dispatch)
+    needs: build-macos-intel
+    # Direct rung only, for the reason given on the Intel job; `freebsd` starts
+    # this level too, and `android` this rung alone, as the input says.
+    if: >-
+      ${{ !cancelled() && (
+            needs.build-macos-intel.result == 'success'
+            || (github.event_name == 'workflow_dispatch' && inputs.ladder
+                && (inputs.start-at == 'freebsd' || inputs.start-at == 'android'))
+          )
+          && github.event_name == 'workflow_dispatch' && inputs.android }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      LIBCLANG_PATH: /usr/lib/llvm-14/lib
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          # The runner image's Android SDK is /usr/local/lib/android, and the
+          # action's default removes it. setup-android then cannot recreate the
+          # directory as the runner user (EACCES, run 42115083236); upstream's
+          # android.yml keeps it for the same reason.
+          android: false
+          large-packages: false
+          swap-storage: false
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Setup Python
+        uses: ./.github/actions/setup-python
+      - name: Bootstrap
+        run: sudo apt update && ./mach bootstrap --skip-lints
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # No legacy `tools` package: Google no longer publishes it and the SDK
+          # manager exits 1 asking for it (run 42145074076). Upstream's android.yml
+          # dropped it as well.
+          packages: 'platform-tools platforms;android-33'
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          # mach refuses anything but r29 ("Servo currently only supports NDK r29").
+          ndk-version: r29
+      # mach, because it is what knows the NDK toolchain environment (linker,
+      # TARGET_CC, API level). `-p` keeps mach from applying servoshell's
+      # feature list to the shim; the multiprocess feature is passed directly.
+      - name: Build libservo C ABI shared object (release, aarch64-linux-android)
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: ./mach build --release --target aarch64-linux-android --no-package -- -p servo-capi-full --features multiprocess
+      - name: Stage libservo.so
+        run: |
+          rel="$CARGO_TARGET_DIR/aarch64-linux-android/release"
+          cp "$rel/libservo_capi_full.so" "$rel/libservo.so"
+          ls -l "$rel/libservo.so"
+      - name: Check the export surface
+        run: NM="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" bash .github/capi-exports/check.sh "$CARGO_TARGET_DIR/aarch64-linux-android/release/libservo.so" 42
+      - name: Record SHA-256
+        run: |
+          lib="$CARGO_TARGET_DIR/aarch64-linux-android/release/libservo.so"
+          hash=$(sha256sum "$lib" | cut -d' ' -f1)
+          echo "$hash  libservo.so"
+          {
+            echo "## libservo-android-arm64-so-multiprocess"
+            echo
+            echo "Commit \`$GITHUB_SHA\`, run \`$GITHUB_RUN_ID\`."
+            echo
+            echo "| File | SHA-256 |"
+            echo "| :--- | :--- |"
+            echo "| \`libservo.so\` | \`$hash\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libservo-android-arm64-so-multiprocess
+          path: |
+            target/aarch64-linux-android/release/libservo.so
+            resources/
+          if-no-files-found: error
+          retention-days: 30

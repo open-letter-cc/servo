@@ -1,0 +1,248 @@
+# Open Letter License (Developer Alpha Preview)
+
+**Developer Alpha Preview.** This version of the Open Letter License applies to the
+Open Letter developer alpha preview only. It will be replaced by a formal
+version before any class is submitted to SPDX for listing.
+
+*The licence an Open Letter Project declares for its own code, in one of
+three classes: Standard, Tools or Enterprise. The project's owner is the
+licensor. Platform mechanics are referenced in the Open Letter EULA and the
+Open Letter Participant Agreement, which change by notice without changing
+this text.*
+
+**SPDX identifiers:** `LicenseRef-OpenLetter-Standard`,
+`LicenseRef-OpenLetter-Tools` and `LicenseRef-OpenLetter-Enterprise`. No
+listed identifier is proposed for the alpha. Each identifier's published text
+is Part 1 of this licence together with that class's Part.
+
+---
+
+## Part 1. Terms common to every class
+
+### 1. Definitions
+
+**Licensor**: the person or entity that owns the copyright in the Work and
+offers it under this licence. For an Open Letter Project, the project's owner.
+
+**Work**: the code, documentation and other material the Licensor offers
+under this licence, as identified by the licence identifier in its files.
+
+**You**: anyone who receives or uses the Work.
+
+**Open Letter**: Open Letter, Inc., a Delaware corporation, which operates
+the Open Letter platform.
+
+**Open Letter EULA**: the Open Letter End User Licence Agreement, published by
+Open Letter at https://openletter.cc/legal/eula, as in force from time to time. It licenses the Open
+Letter software and sets the platform royalty, reporting and payment rails.
+
+**Open Letter Participant Agreement**: the Open Letter Participant Agreement, published
+at https://openletter.cc/legal/participant-agreement, as in force from time to time. It governs contributions to the
+Work and contributor royalties.
+
+**Merge Notes**: the signed terms recorded with a merge, as defined in the
+Open Letter Participant Agreement.
+
+**The Rails**: Open Letter's identity, licence and royalty gates, and its
+payment rails, as described in the Open Letter EULA.
+
+### 2. Third-party material
+
+Third-party code keeps its own licence. This licence never relicenses it.
+Third-party notices in the Work must be kept.
+
+### 3. Licence expressions
+
+3.1 This licence may be combined with another licence in an SPDX licence
+expression only as the class Part allows.
+
+3.2 An expression that names this licence inside an `OR`, or that joins it in
+a way the class Part forbids, does not license the Work.
+
+### 4. Restrictions in every class
+
+You must not:
+(a) use the Work, or any output of it, to train, fine-tune or evaluate any
+    machine-learning model or automated tool, anywhere in the universe;
+(b) circumvent, disable or falsify the Rails;
+(c) remove or alter licence, copyright or attribution notices; or
+(d) use the Work in breach of export-control or sanctions law.
+
+### 5. No other rights
+
+No right is granted except as this licence states. No patent licence is
+granted except to use the Work as this licence permits. Contributions to the
+Work are governed by the Open Letter Participant Agreement.
+
+### 6. Disclaimer and exclusion of liability
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. TO THE FULLEST
+EXTENT PERMITTED BY LAW, NEITHER THE LICENSOR NOR OPEN LETTER HAS ANY
+LIABILITY TO YOU ARISING FROM THE WORK. Where a zero limit is unenforceable,
+liability is limited to the minimum the law permits, and in any case to the
+greater of USD 100 and the amounts you paid for the Work in the 12 months
+before the claim.
+
+### 7. Termination
+
+Your rights under this licence end automatically if you breach it. They are
+restored if you cure the breach within 30 days of becoming aware of it,
+unless the Licensor has terminated them for a repeated breach.
+
+### 8. Transfers
+
+Your rights are conditioned on continued compliance, whoever holds the Work
+after any sale, merger or other transfer. Anyone who continues to use or
+distribute the Work after acquiring it accepts this licence.
+
+### 9. Law
+
+This licence is governed by the laws of the State of Delaware. Disputes are
+resolved as the Open Letter EULA provides.
+
+---
+
+## Part 3. Tools class
+
+*Identifier: `LicenseRef-OpenLetter-Tools`.*
+
+### F1. Grant
+
+Subject to Part 1 and this Part, the Licensor grants you a worldwide,
+non-exclusive licence to use the Work, free of charge where F4 applies and
+for the price in F5 otherwise. No platform royalty is owed for the Work;
+Open Letter's fee for collecting and paying the price is set in the Open
+Letter EULA.
+
+### F2. Use only
+
+F2.1 **Use.** You may use the Work yourself, and read its source. To use the
+Work is to run it, or apply its outputs, in building, checking or running
+your own project, without shipping it. Running it at build or test time, for
+example as a build script, procedural macro, code generator, linter, test
+tool or automated action, is use.
+
+F2.2 You may not modify the Work, or ship, sell or sublicense it, in any
+form, for a fee or free of charge, except as F2.6 allows a Standard Project.
+To ship the Work is to give anyone else any part of its code, in source or
+compiled form, including by copying it into a repository, package or release
+that others receive, or by linking it into what you distribute; or to host it
+so that others can run it. Only the Licensor ships it, through the Rails.
+
+F2.3 **Not open source.** The Work is for build use. It is free to use for the
+projects in F4, not free to change, and not shipped or linked into a shipped
+product by anyone but a Standard Project under F2.6.
+
+F2.4 **By reference.** Naming the Work as a dependency, or calling it by
+reference, does not ship it where each person who runs it obtains it from
+the Licensor through the Rails. Their use is then their own, under F4 and F5.
+
+F2.5 **Outputs.** What you make by using the Work is yours, subject to Part 1
+§4. Where the Work places part of its own code in its output, as a generator
+or procedural macro is designed to, you may ship that part within that
+output, but not use it apart from that output.
+
+F2.6 **Standard Projects.** A Standard Project may depend on the Work and link
+it into a product it distributes through the Rails. The Work reaches each user
+of that product through the Rails as its own package, under its own
+identifier, and is never copied into the Standard Project's source. That use
+is free under F4.1(b); where an Enterprise user pays for the product, F5.2
+applies.
+
+### F3. Combining with other licences
+
+The Tools class is never joined to another licence, with `AND` or `OR`. A
+Standard Project that links the Work lists it as its own package (F2.6). For
+anyone else to ship the Work, the Licensor must license it under another
+class, or agree it with them in writing.
+
+### F4. Free use
+
+F4.1 You may use the Work free of charge in:
+(a) a project under a permissive open-source licence on the list Open
+    Letter publishes for this purpose;
+(b) a Standard Project, that is, a project under the Standard class; or
+(c) the Licensor's own projects, counting the Licensor as one with the
+    verified person who holds its Account and every Connected Entity of that
+    person, as Open Letter EULA 3.2(a) counts them. Whether the Work is the
+    person's or the entity's to license is between them, under their own
+    agreements; this licence does not decide it.
+
+F4.2 Whether a use is free is decided by the Rails' licence gate at the time
+of use. The Licensor cannot change the list in F4.1 for its Work. A Licensor
+that wants other terms licenses its Work under another licence.
+
+### F5. Paid use
+
+F5.1 Any other use of the Work requires payment of the price the Licensor
+declares in the repository settings of the version of the Work you use, as
+committed in that version. The price may be a flat fee, a subscription, a royalty,
+or a combination of them. The repository settings name the Licensor by its
+Open Letter Account, and are signed by that Account. A subscription is paid
+by each project that has the Work in it, for each period it is there. A
+royalty is a share of the Gross Revenue (Open Letter EULA) of the Product the
+Work is used to build, for each quarter it is in use, or, through a Standard
+Project, a share of the payment (F5.2).
+
+F5.2 **Through a Standard Project.** Where an Enterprise user pays a Standard
+Project that used the Work, the Work's declared royalty is taken from that
+payment for the Licensor, as the Rails calculate it at each step of the
+chain, and the rest is the Standard Project's. An Enterprise user is anyone
+whose use of the Work would not be free under F4. A Standard Project never
+pays this from its own funds.
+
+F5.3 **Payment through the Rails.** The price is paid through the Rails.
+Open Letter collects it for the Licensor and pays it to the Work's
+contributors and maintainers under the Open Letter Participant Agreement.
+
+F5.4 **Calculation.** Open Letter's licence and royalty gates identify every
+work a use depends on and collate the price of each, as the Open Letter EULA
+provides. Their statement is the record of what is owed, subject to
+correction under the Open Letter EULA. The statement shows each step of the
+chain to every party in it.
+
+F5.5 **Every tool is paid once.** Where a paid use reaches the Work through
+one or more layers, wrappers, projects or services, including Standard
+Projects, the Work is paid once for that use, at its declared price for that
+route (F5.1 for direct use, F5.2 through a Standard Project). No layer
+removes the Work's price, and the Work is not paid more than once for the
+same use.
+
+F5.6 **Price follows the version.** A later change of price applies only to
+later versions. The version you use keeps its own price.
+
+F5.7 **No declared price.** A version of the Work that declares no price may
+be used only as F4 allows. No paid licence is offered for it.
+
+### F6. Forks
+
+F6.1 You may fork the Work only with the Licensor's permission, recorded
+through the Rails as an agreement in the fork's Merge Notes.
+
+F6.2 That agreement sets whether, and how, the Licensor shares in what is
+paid for the fork. A permitted fork is in the Tools class, and this Part
+applies to it with the fork's maker as its Licensor for the maker's part. A
+fork is a layer over the Work (F5.5). The Work's declared price applies to
+every use of the fork as it applies to the Work, the maker's own use
+included, unless the agreement in F6.1 sets another share. F4.1(c) frees the
+maker's use of its own part only.
+
+### F7. No Standard code
+
+A Work in the Tools class carries no code under the Standard class. A Work
+that does is in the Standard class. "Carries" means anywhere in the Work's
+build: its normal, build and procedural-macro dependencies, under every
+feature, and any Standard-class source copied into the Work itself.
+Dependencies used only for tests, examples or benchmarks, nothing of which is
+in the Work as the Licensor ships it, are not carried.
+
+### F8. Paid licences survive withdrawal
+
+Where you have paid for a version of the Work, the signed record of that
+payment is your licence to use that version on its terms. It survives the
+Licensor withdrawing the Work or deleting its repository. You may keep
+using the copy you hold. Neither the Licensor nor Open Letter must deliver
+the version again.
+
+---
+

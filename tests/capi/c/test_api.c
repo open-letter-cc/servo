@@ -7,6 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The same sizes `tests::abi_struct_sizes` pins on the Rust side, checked here
+// against the generated header as a C caller compiles it.
+_Static_assert(sizeof(ServoWebViewDelegate) == 152, "ServoWebViewDelegate size");
+_Static_assert(sizeof(struct ServoPermissionRequest) == 64, "ServoPermissionRequest size");
+_Static_assert(sizeof(struct ServoEmbedderControl) == 56, "ServoEmbedderControl size");
+_Static_assert(sizeof(struct ServoFrameInfo) == 32, "ServoFrameInfo size");
+
 // The test runner expects us to return 0 for success and
 // non-zero for failure.
 

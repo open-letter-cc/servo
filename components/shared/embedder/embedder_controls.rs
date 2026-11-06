@@ -11,7 +11,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use servo_base::Epoch;
 use servo_base::generic_channel::GenericSender;
-use servo_base::id::{PipelineId, WebViewId};
+use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_url::ImmutableOrigin;
 use url::Url;
 use uuid::Uuid;
@@ -26,8 +26,19 @@ pub struct EmbedderControlId {
     pub webview_id: WebViewId,
     #[doc(hidden)]
     pub pipeline_id: PipelineId,
+    /// The browsing context of the frame whose document asked for the control. Unlike
+    /// `pipeline_id`, this stays the same across navigations inside the frame.
+    #[doc(hidden)]
+    pub browsing_context_id: BrowsingContextId,
     #[doc(hidden)]
     pub index: Epoch,
+}
+
+impl EmbedderControlId {
+    /// The browsing context of the frame whose document asked for this control.
+    pub fn browsing_context_id(&self) -> BrowsingContextId {
+        self.browsing_context_id
+    }
 }
 
 /// A request from the engine to the embedder to display a user interface control.
@@ -44,6 +55,9 @@ pub enum EmbedderControlRequest {
     InputMethod(InputMethodRequest),
     /// Indicates that the the user has triggered the display of a context menu.
     ContextMenu(ContextMenuRequest),
+    /// Opaque bytes that page script asked to have delivered to the embedder. Servo never
+    /// parses them.
+    PageRequest(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -175,6 +189,9 @@ pub enum EmbedderControlResponse {
     ColorPicker(Option<RgbColor>),
     FilePicker(Option<Vec<SelectedFile>>),
     ContextMenu(Option<ContextMenuAction>),
+    /// The embedder's answer to a [`EmbedderControlRequest::PageRequest`]: opaque bytes, or
+    /// `None` to reject the page's promise.
+    PageRequest(Option<Vec<u8>>),
 }
 
 /// Response to file selection request

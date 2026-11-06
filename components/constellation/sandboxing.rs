@@ -143,12 +143,16 @@ pub fn content_process_sandbox_profile() {
     process::exit(1);
 }
 
+// Keep this in step with `content_process_sandbox_profile` above: a platform the
+// profile covers must take the sandboxed arm below, or `--sandbox` spawns an
+// unsandboxed child that then refuses to activate. Apple arm devices are the
+// case that bites: the profile keeps them, so the spawn must too.
 #[cfg(any(
     target_os = "windows",
     target_os = "android",
     target_env = "ohos",
     target_arch = "arm",
-    target_arch = "aarch64",
+    all(target_arch = "aarch64", not(target_os = "macos")),
     target_arch = "riscv32",
     target_arch = "riscv64"
 ))]
@@ -177,15 +181,18 @@ pub fn spawn_multiprocess(
     Ok(crate::process_manager::Process::Unsandboxed(child))
 }
 
-#[cfg(all(
-    not(target_os = "windows"),
-    not(target_os = "ios"),
-    not(target_os = "android"),
-    not(target_env = "ohos"),
-    not(target_arch = "arm"),
-    not(target_arch = "aarch64"),
-    not(target_arch = "riscv32"),
-    not(target_arch = "riscv64")
+#[cfg(any(
+    target_os = "macos",
+    all(
+        not(target_os = "windows"),
+        not(target_os = "ios"),
+        not(target_os = "android"),
+        not(target_env = "ohos"),
+        not(target_arch = "arm"),
+        not(target_arch = "aarch64"),
+        not(target_arch = "riscv32"),
+        not(target_arch = "riscv64")
+    )
 ))]
 pub fn spawn_multiprocess(
     content: UnprivilegedContent,

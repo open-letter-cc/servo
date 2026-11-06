@@ -114,23 +114,37 @@ pub trait PlatformFontMethods: Sized {
     fn new_from_template(
         template: FontTemplateRef,
         pt_size: Option<Au>,
-        data: &Option<FontData>,
+        data: &Option<FontDataAndIndex>,
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str> {
         let template = template.borrow();
         let font_identifier = template.identifier.clone();
 
-        match font_identifier {
-            FontIdentifier::Local(font_identifier) => {
-                Self::new_from_local_font_identifier(font_identifier, pt_size, synthetic_bold)
-            },
-            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => Self::new_from_data(
+        match (font_identifier, data) {
+            // A local font whose bytes were provided, by the `SystemFontService`, is
+            // created from them so that this process never opens the font file itself.
+            (font_identifier @ FontIdentifier::Local(_), Some(data)) => Self::new_from_data(
                 font_identifier,
-                data.as_ref()
-                    .expect("Should never create a web font without data."),
+                &data.data,
+                data.index,
                 pt_size,
                 synthetic_bold,
             ),
+            (FontIdentifier::Local(font_identifier), None) => {
+                Self::new_from_local_font_identifier(font_identifier, pt_size, synthetic_bold)
+            },
+            (font_identifier @ (FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_)), data) => {
+                let data = data
+                    .as_ref()
+                    .expect("Should never create a web font without data.");
+                Self::new_from_data(
+                    font_identifier,
+                    &data.data,
+                    data.index,
+                    pt_size,
+                    synthetic_bold,
+                )
+            },
         }
     }
 
@@ -140,9 +154,13 @@ pub trait PlatformFontMethods: Sized {
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str>;
 
+    /// Create a platform font from font file bytes. `face_index` selects the face
+    /// within a collection file and is 0 for a single-face file; a local font's
+    /// identifier may carry a more specific index on some platforms, which wins.
     fn new_from_data(
         font_identifier: FontIdentifier,
         data: &FontData,
+        face_index: u32,
         pt_size: Option<Au>,
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str>;
@@ -351,7 +369,7 @@ impl Font {
     pub fn new(
         template: FontTemplateRef,
         descriptor: FontDescriptor,
-        data: Option<FontData>,
+        data: Option<FontDataAndIndex>,
         synthesized_small_caps: Option<FontRef>,
     ) -> Result<Font, &'static str> {
         let synthetic_bold = {
@@ -384,9 +402,7 @@ impl Font {
             template,
             metrics: OnceLock::new(),
             descriptor,
-            data_and_index: data
-                .map(|data| OnceLock::from(FontDataAndIndex { data, index: 0 }))
-                .unwrap_or_default(),
+            data_and_index: data.map(OnceLock::from).unwrap_or_default(),
             shaper: OnceLock::new(),
             cached_shape_data: Default::default(),
             font_instance_key: Default::default(),

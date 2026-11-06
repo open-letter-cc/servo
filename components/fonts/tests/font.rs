@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use app_units::Au;
 use fonts::platform::font::PlatformFont;
 use fonts::{
-    Font, FontData, FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef,
-    PlatformFontMethods, ShapingFlags, ShapingOptions,
+    Font, FontData, FontDataAndIndex, FontDescriptor, FontIdentifier, FontTemplate,
+    FontTemplateRef, PlatformFontMethods, ShapingFlags, ShapingOptions,
 };
 use icu_locale_core::subtags::Language;
 use servo_url::ServoUrl;
@@ -34,7 +34,7 @@ fn make_font(path: PathBuf) -> Font {
 
     let identifier = FontIdentifier::Web(ServoUrl::from_file_path(path).unwrap());
     let platform_font =
-        PlatformFont::new_from_data(identifier.clone(), &data, None, false).unwrap();
+        PlatformFont::new_from_data(identifier.clone(), &data, 0, None, false).unwrap();
 
     let template = FontTemplate::new(identifier, platform_font.descriptor(), None);
     let descriptor = FontDescriptor {
@@ -47,7 +47,13 @@ fn make_font(path: PathBuf) -> Font {
         synthesis_weight: FontSynthesis::Auto,
         optical_sizing: FontOpticalSizing::Auto,
     };
-    Font::new(FontTemplateRef::new(template), descriptor, Some(data), None).unwrap()
+    Font::new(
+        FontTemplateRef::new(template),
+        descriptor,
+        Some(FontDataAndIndex { data, index: 0 }),
+        None,
+    )
+    .unwrap()
 }
 
 #[test]

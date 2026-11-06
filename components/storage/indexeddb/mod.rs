@@ -35,13 +35,20 @@ use crate::indexeddb::engines::{KvsEngine, KvsOperation, KvsTransaction, SqliteE
 use crate::shared::is_sqlite_disk_full_error;
 
 pub trait IndexedDBThreadFactory {
-    fn new(mem_profiler_chan: MemProfilerChan, reporter_name: String) -> Self;
+    /// `temporary_storage` keeps every database in memory; it must agree with the
+    /// value given to the client storage thread, which then creates no directories.
+    fn new(
+        mem_profiler_chan: MemProfilerChan,
+        reporter_name: String,
+        temporary_storage: bool,
+    ) -> Self;
 }
 
 impl IndexedDBThreadFactory for GenericSender<IndexedDBThreadMsg> {
     fn new(
         mem_profiler_chan: MemProfilerChan,
         reporter_name: String,
+        temporary_storage: bool,
     ) -> GenericSender<IndexedDBThreadMsg> {
         let (chan, port) = generic_channel::channel().unwrap();
         let chan2 = chan.clone();
@@ -52,7 +59,7 @@ impl IndexedDBThreadFactory for GenericSender<IndexedDBThreadMsg> {
             .name("IndexedDBManager".to_owned())
             .spawn(move || {
                 mem_profiler_chan.run_with_memory_reporting(
-                    || IndexedDBManager::new(port, manager_sender).start(),
+                    || IndexedDBManager::new(port, manager_sender, temporary_storage).start(),
                     reporter_name,
                     chan2,
                     IndexedDBThreadMsg::CollectMemoryReport,
@@ -1018,6 +1025,9 @@ struct IndexedDBManager {
     databases: HashMap<IndexedDBDescription, IndexedDBEnvironment<SqliteEngine>>,
     thread_pool: Arc<ThreadPool>,
 
+    /// Whether databases are kept in memory rather than on disk.
+    temporary_storage: bool,
+
     /// A global counter to produce unique transaction ids.
     /// TODO: remove once db connections lifecyle is managed.
     /// A global counter is only necessary because of how deleting a db currently
@@ -1035,6 +1045,7 @@ impl IndexedDBManager {
     fn new(
         port: GenericReceiver<IndexedDBThreadMsg>,
         manager_sender: GenericSender<IndexedDBThreadMsg>,
+        temporary_storage: bool,
     ) -> IndexedDBManager {
         debug!("New indexedDBManager");
 
@@ -1043,6 +1054,7 @@ impl IndexedDBManager {
             manager_sender,
             databases: HashMap::new(),
             thread_pool: ThreadPool::global(),
+            temporary_storage,
             serial_number_counter: 0,
             connection_queues: Default::default(),
             connections: Default::default(),
@@ -1827,8 +1839,12 @@ impl IndexedDBManager {
                         return;
                     },
                 };
-                let engine = match SqliteEngine::new(path, created, &key, self.thread_pool.clone())
-                {
+                let open = if self.temporary_storage {
+                    SqliteEngine::new_temporary
+                } else {
+                    SqliteEngine::new
+                };
+                let engine = match open(path, created, &key, self.thread_pool.clone()) {
                     Ok(engine) => engine,
                     Err(err) => {
                         let error = backend_error_from_sqlite_error(err);

@@ -616,8 +616,10 @@ impl GlobalScope {
             &mut *self.message_port_state.borrow_mut()
         {
             match message_ports.get_mut(&port_id) {
+                // Note: the port can be closed by script, and collected,
+                // while the constellation completes its transfer.
                 None => {
-                    panic!("complete_port_transfer called for an unknown port.");
+                    return warn!("complete_port_transfer called for an unknown port.");
                 },
                 Some(managed_port) => {
                     if managed_port.pending {
@@ -631,12 +633,12 @@ impl GlobalScope {
                         }
                         port_impl.enabled()
                     } else {
-                        panic!("managed-port has no port-impl.");
+                        return warn!("managed-port has no port-impl.");
                     }
                 },
             }
         } else {
-            panic!("complete_port_transfer called for an unknown port.");
+            return warn!("complete_port_transfer called on a global not managing any ports.");
         };
         if should_start {
             self.start_message_port(cx, &port_id);
@@ -808,7 +810,7 @@ impl GlobalScope {
                             managed_port.dom_port.entangle(*entangled_id);
                             port_impl.entangle(*entangled_id);
                         } else {
-                            panic!("managed-port has no port-impl.");
+                            return warn!("managed-port has no port-impl.");
                         }
                     },
                 }
@@ -852,12 +854,12 @@ impl GlobalScope {
             &mut *self.message_port_state.borrow_mut()
         {
             let (message_buffer, dom_port) = match message_ports.get_mut(port_id) {
-                None => panic!("start_message_port called on a unknown port."),
+                None => return warn!("start_message_port called on an unknown port."),
                 Some(managed_port) => {
                     if let Some(port_impl) = managed_port.port_impl.as_mut() {
                         (port_impl.start(), managed_port.dom_port.as_rooted())
                     } else {
-                        panic!("managed-port has no port-impl.");
+                        return warn!("managed-port has no port-impl.");
                     }
                 },
             };
@@ -894,7 +896,7 @@ impl GlobalScope {
                 port_impl.close();
                 managed_port.explicitly_closed = true;
             } else {
-                panic!("managed-port has no port-impl.");
+                warn!("managed-port has no port-impl.");
             }
         } else {
             warn!("close_message_port called on a global not managing any ports.")
@@ -908,12 +910,12 @@ impl GlobalScope {
             &mut *self.message_port_state.borrow_mut()
         {
             let entangled_port = match message_ports.get_mut(&port_id) {
-                None => panic!("post_messageport_msg called on an unknown port."),
+                None => return warn!("post_messageport_msg called on an unknown port."),
                 Some(managed_port) => {
                     if let Some(port_impl) = managed_port.port_impl.as_mut() {
                         port_impl.entangled_port_id()
                     } else {
-                        panic!("managed-port has no port-impl.");
+                        return warn!("managed-port has no port-impl.");
                     }
                 },
             };
@@ -1130,25 +1132,20 @@ impl GlobalScope {
         let should_dispatch = if let MessagePortState::Managed(_id, message_ports) =
             &mut *self.message_port_state.borrow_mut()
         {
-            if !message_ports.contains_key(&port_id) {
+            let Some(managed_port) = message_ports.get_mut(&port_id) else {
                 self.re_route_port_task(port_id, task);
                 return;
-            }
-            match message_ports.get_mut(&port_id) {
-                None => panic!("route_task_to_port called for an unknown port."),
-                Some(managed_port) => {
-                    // If the port is not enabled yet, or if is awaiting the completion of it's transfer,
-                    // the task will be buffered and dispatched upon enablement or completion of the transfer.
-                    if let Some(port_impl) = managed_port.port_impl.as_mut() {
-                        let to_dispatch = port_impl.handle_incoming(task).map(|to_dispatch| {
-                            (DomRoot::from_ref(&*managed_port.dom_port), to_dispatch)
-                        });
-                        cross_realm_transform.set(managed_port.cross_realm_transform.clone());
-                        to_dispatch
-                    } else {
-                        panic!("managed-port has no port-impl.");
-                    }
-                },
+            };
+            // If the port is not enabled yet, or if is awaiting the completion of it's transfer,
+            // the task will be buffered and dispatched upon enablement or completion of the transfer.
+            if let Some(port_impl) = managed_port.port_impl.as_mut() {
+                let to_dispatch = port_impl
+                    .handle_incoming(task)
+                    .map(|to_dispatch| (DomRoot::from_ref(&*managed_port.dom_port), to_dispatch));
+                cross_realm_transform.set(managed_port.cross_realm_transform.clone());
+                to_dispatch
+            } else {
+                return warn!("managed-port has no port-impl.");
             }
         } else {
             self.re_route_port_task(port_id, task);

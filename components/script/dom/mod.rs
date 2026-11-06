@@ -250,6 +250,7 @@ pub(crate) use self::document::*;
 pub(crate) mod domexception;
 pub(crate) mod element;
 pub(crate) use self::element::*;
+pub(crate) mod embedderrequest;
 pub(crate) mod encoding;
 pub(crate) use self::encoding::*;
 pub(crate) mod event;

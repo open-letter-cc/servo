@@ -13,6 +13,9 @@ disallowed-coauthors = [
 [ignore]
 # Files that are ignored for all tidy and lint checks.
 files = [
+    # The embedder page-request namespace has no specification: it is this
+    # fork's own, exposed behind a preference, and documented in the file.
+    "./components/script_bindings/webidls/EmbedderRequest.webidl",
     "./components/shared/net/tests/parsable_mime/text",
     "./components/default-resources/resources/hsts_preload.fstmap",
     "./tests/wpt/meta/MANIFEST.json",
@@ -45,6 +48,8 @@ directories = [
     "./tests/wpt/mozilla/tests/webgl",
     "./python/tidy/tests",
     "./python/mach",
+    # The fork's own module, under its own licence; tidy would demand an MPL header.
+    "./vendor/motor-controller",
     # Generated and upstream code combined with our own. Could use cleanup
     "./target",
     "./support/crown/target",

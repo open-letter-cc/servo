@@ -18,8 +18,21 @@ crate-type = ["cdylib"]
 capi = [] # Needed by `cargo-c`.
 # TODO: Need to think about which features from servo can be
 # exposed here for conditional compilation of C API.
+# Compile the content-process entry point, `servo_content_process_main`.
+#
+# Off by default, because turning it on pulls upstream's multiprocess support
+# into the payload. The symbol is exported either way: without this feature it
+# resolves and returns SERVO_CONTENT_PROCESS_UNSUPPORTED, so an embedder detects
+# the gap by calling it rather than by failing to find it.
+multiprocess = ["servo/multiprocess"]
 
 [dependencies]
+# Used directly by the clipboard-access gate (`clipboard.rs`) to reach the OS
+# clipboard on an allow. `components/servo`'s own default clipboard delegate does
+# the same thing, but it is `pub(crate)` there, so this crate cannot compose with
+# it and talks to the OS clipboard itself instead. Already in the workspace graph
+# through `components/servo`'s own `clipboard` feature.
+arboard = { workspace = true }
 dpi = { workspace = true }
 euclid = { workspace = true }
 libc = { workspace = true }
@@ -40,3 +53,7 @@ subdirectory = "servo"
 
 [package.metadata.capi.library]
 name = "servo_capi"
+
+[lints.rust]
+# `capi_full` is set by ffi/capi-full, which compiles this crate's source as its own.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(capi_full)'] }
