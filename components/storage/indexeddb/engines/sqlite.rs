@@ -88,7 +88,37 @@ impl SqliteEngine {
         db_info: &IndexedDBDescription,
         pool: Arc<ThreadPool>,
     ) -> Result<Self, Error> {
-        let db_path = path.join("indexeddb.sqlite");
+        Self::open(path.join("indexeddb.sqlite"), created, db_info, pool)
+    }
+
+    /// Opens the database for `path` in memory, for temporary storage, so that nothing
+    /// it holds outlives the process.
+    ///
+    /// Transactions open their own connections by `db_path`, so it names a database in
+    /// the `memdb` VFS: a name beginning with "/" is shared by every connection in this
+    /// process, with ordinary locking, and lives as long as `connection` does. The
+    /// registry hands out a directory name that is unique per database, and creates no
+    /// directory for it.
+    pub fn new_temporary(
+        path: PathBuf,
+        created: bool,
+        db_info: &IndexedDBDescription,
+        pool: Arc<ThreadPool>,
+    ) -> Result<Self, Error> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| Error::InvalidPath(path.clone()))?;
+        let db_path = PathBuf::from(format!("file:/{name}?vfs=memdb"));
+        Self::open(db_path, created, db_info, pool)
+    }
+
+    fn open(
+        db_path: PathBuf,
+        created: bool,
+        db_info: &IndexedDBDescription,
+        pool: Arc<ThreadPool>,
+    ) -> Result<Self, Error> {
         let connection = Self::init_db(&db_path, db_info)?;
 
         for stmt in DB_PRAGMAS {
@@ -884,8 +914,9 @@ mod tests {
         ClientStorageThreadHandle, StorageIdentifier, StorageProxyMap, StorageType,
     };
     use storage_traits::indexeddb::{
-        AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, CreateObjectResult,
-        IndexedDBKeyRange, IndexedDBKeyType, IndexedDBTxnMode, KeyPath, PutItemResult,
+        AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, BackendError,
+        CreateObjectResult, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBTxnMode, KeyPath,
+        PutItemResult,
     };
     use url::Host;
 
@@ -919,12 +950,27 @@ mod tests {
         StorageProxyMap,
         ClientStorageThreadHandle,
     ) {
+        create_db_with_storage(db_name, false)
+    }
+
+    fn create_db_with_storage(
+        db_name: String,
+        temporary_storage: bool,
+    ) -> (
+        tempfile::TempDir,
+        PathBuf,
+        bool,
+        StorageProxyMap,
+        ClientStorageThreadHandle,
+    ) {
         if PIPELINE_NAMESPACE.get().is_none() {
             install_test_namespace();
         }
         let tmp_dir = tempfile::tempdir().unwrap();
-        let handle: ClientStorageThreadHandle =
-            ClientStorageThreadFactory::new(Some(tmp_dir.path().to_path_buf()), true);
+        let handle: ClientStorageThreadHandle = ClientStorageThreadFactory::new(
+            Some(tmp_dir.path().to_path_buf()),
+            temporary_storage,
+        );
 
         let storage_proxy_map = handle
             .obtain_a_storage_bottle_map(
@@ -942,6 +988,92 @@ mod tests {
             .unwrap()
             .unwrap();
         (tmp_dir, path, created, storage_proxy_map, handle)
+    }
+
+    /// Under temporary storage nothing reaches disk, and the in-memory database is shared
+    /// between the engine's connection and those its transactions open.
+    #[test]
+    fn test_temporary_storage_is_in_memory_and_shared() {
+        let (temp_dir, path, created, proxy_map, handle) =
+            create_db_with_storage("test_db".to_string(), true);
+        let db = SqliteEngine::new_temporary(
+            path.clone(),
+            created,
+            &IndexedDBDescription {
+                name: "test_db".to_string(),
+                origin: test_origin(),
+            },
+            get_pool(),
+        )
+        .unwrap();
+
+        // The store is created on the engine's own connection.
+        let store_name = "test_store";
+        db.create_store(store_name, None, false)
+            .expect("Failed to create store");
+
+        // Each transaction opens a connection of its own, which must see that store.
+        let (put_sender, put_receiver) = generic_channel::channel().unwrap();
+        let (count_sender, count_receiver) = generic_channel::channel().unwrap();
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        db.process_transaction(
+            KvsTransaction {
+                mode: IndexedDBTxnMode::Readwrite,
+                requests: VecDeque::from(vec![KvsOperation {
+                    store_name: store_name.to_owned(),
+                    operation: AsyncOperation::ReadWrite(AsyncReadWriteOperation::PutItem {
+                        callback: GenericCallback::new(move |result| {
+                            let _ = put_sender.send(result.unwrap());
+                        })
+                        .unwrap(),
+                        key: Some(IndexedDBKeyType::Number(1.0)),
+                        value: vec![1, 2, 3],
+                        should_overwrite: false,
+                        key_generator_current_number: None,
+                    }),
+                }]),
+            },
+            Box::new(move || {
+                let _ = done_sender.send(());
+            }),
+        );
+        done_receiver.recv().unwrap();
+        let put: Result<PutItemResult, BackendError> = put_receiver.recv().unwrap();
+        assert_eq!(put.unwrap(), PutItemResult::Key(IndexedDBKeyType::Number(1.0)));
+
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        db.process_transaction(
+            KvsTransaction {
+                mode: IndexedDBTxnMode::Readonly,
+                requests: VecDeque::from(vec![KvsOperation {
+                    store_name: store_name.to_owned(),
+                    operation: AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Count {
+                        callback: GenericCallback::new(move |result| {
+                            let _ = count_sender.send(result.unwrap());
+                        })
+                        .unwrap(),
+                        key_range: IndexedDBKeyRange::default(),
+                    }),
+                }]),
+            },
+            Box::new(move || {
+                let _ = done_sender.send(());
+            }),
+        );
+        done_receiver.recv().unwrap();
+        let count: Result<u64, BackendError> = count_receiver.recv().unwrap();
+        assert_eq!(count.unwrap(), 1);
+
+        // No directory was created, for the database or for the registry.
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+
+        drop(db);
+        handle
+            .delete_database(proxy_map.bottle_id, "test_db".to_string())
+            .recv()
+            .unwrap()
+            .expect("Failed to delete database");
     }
 
     #[test]

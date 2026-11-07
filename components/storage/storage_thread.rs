@@ -28,6 +28,7 @@ fn new_storage_thread_group(
     let idb: GenericSender<IndexedDBThreadMsg> = IndexedDBThreadFactory::new(
         mem_profiler_chan.clone(),
         format!("indexedDB-reporter-{label}"),
+        temporary_storage,
     );
     let web_storage: GenericSender<WebStorageThreadMsg> = WebStorageThreadFactory::new(
         config_dir.clone(),

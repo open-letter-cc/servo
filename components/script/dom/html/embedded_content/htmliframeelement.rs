@@ -9,7 +9,7 @@ use content_security_policy::sandboxing_directive::{
     SandboxingFlagSet, parse_a_sandboxing_directive,
 };
 use dom_struct::dom_struct;
-use embedder_traits::ViewportDetails;
+use embedder_traits::{EmbedderMsg, ViewportDetails};
 use html5ever::{LocalName, Prefix, local_name, ns};
 use js::context::JSContext;
 use js::rust::HandleObject;
@@ -591,6 +591,15 @@ impl HTMLIFrameElement {
         self.pending_pipeline_id.set(None);
         self.webview_id.set(Some(webview_id));
         self.browsing_context_id.set(Some(browsing_context_id));
+        // Announced before the navigable is initialized, so before any script can run in
+        // it, and on the channel its script will use: the embedder learns of the frame
+        // before anything the frame itself sends.
+        window.send_to_embedder(EmbedderMsg::FrameCreated(
+            webview_id,
+            browsing_context_id,
+            Some(window.window_proxy().browsing_context_id()),
+            ServoUrl::parse("about:blank").unwrap(),
+        ));
         // Step 8. Initialize the navigable navigable given documentState and parentNavigable.
         self.start_new_pipeline(
             cx,

@@ -188,12 +188,13 @@ impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
         _font_identifier: FontIdentifier,
         data: &FontData,
+        face_index: u32,
         pt_size: Option<Au>,
         synthetic_bold: bool,
     ) -> Result<Self, &'static str> {
         let font_face = FontFile::new_from_buffer(Arc::new(data.clone()))
             .ok_or("Could not create FontFile")?
-            .create_face(0 /* face_index */, DWRITE_FONT_SIMULATIONS_NONE)
+            .create_face(face_index, DWRITE_FONT_SIMULATIONS_NONE)
             .map_err(|_| "Could not create FontFace")?;
         Self::new_with_variations(font_face, pt_size, &[], synthetic_bold)
     }

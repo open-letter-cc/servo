@@ -231,6 +231,18 @@ pub unsafe extern "C" fn servo_options_set_background_hang_monitor(
 /// `options` is a handle to a `ServoOptions` object.
 /// The ownership of `options` remains with the caller after the call.
 ///
+/// # Not supported on every platform, and not inert where it is not
+///
+/// On Windows there is no content-process sandbox. Servo spawns content
+/// processes unsandboxed there regardless of this setting, and a content
+/// process that finds this enabled **panics on startup** rather than
+/// ignoring it. So on Windows this must be left disabled: enabling it does
+/// not harden anything and does stop content from running at all.
+///
+/// Where multiprocess is in use without a sandbox, a content process has the
+/// privileges of the process it was spawned from. Confining it is the
+/// embedder's job, not this flag's.
+///
 /// # Safety
 ///
 /// The caller must ensure that `options` is a non-null pointer to a

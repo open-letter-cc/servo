@@ -62,7 +62,10 @@ use crate::font_feature_values::{
 };
 use crate::font_store::{CrossThreadFontStore, FontStore};
 use crate::platform::font::PlatformFont;
-use crate::{FontData, LowercaseFontFamilyName, PlatformFontMethods, SystemFontServiceProxy};
+use crate::{
+    FontData, FontDataAndIndex, LowercaseFontFamilyName, PlatformFontMethods,
+    SystemFontServiceProxy,
+};
 
 static SMALL_CAPS_SCALE_FACTOR: f32 = 0.8; // Matches FireFox (see gfxFont.h)
 
@@ -367,10 +370,22 @@ impl FontContext {
         font_descriptor: FontDescriptor,
         synthesized_small_caps: Option<FontRef>,
     ) -> Result<FontRef, &'static str> {
+        let identifier = font_template.identifier();
+        let data = match &*identifier {
+            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => self
+                .get_font_data(&identifier)
+                .map(|data| FontDataAndIndex { data, index: 0 }),
+            // Local fonts come as bytes from the system font service, so that a
+            // sandboxed process need not read font files. `None` falls back to the
+            // platform's own loading by path.
+            FontIdentifier::Local(local_identifier) => self
+                .system_font_service_proxy
+                .get_local_font_data(local_identifier),
+        };
         Ok(FontRef(Arc::new(Font::new(
             font_template.clone(),
             font_descriptor,
-            self.get_font_data(&font_template.identifier()),
+            data,
             synthesized_small_caps,
         )?)))
     }
@@ -567,7 +582,8 @@ impl FontContext {
         );
 
         let identifier = FontIdentifier::Web(url);
-        let Ok(handle) = PlatformFont::new_from_data(identifier.clone(), &font_data, None, false)
+        let Ok(handle) =
+            PlatformFont::new_from_data(identifier.clone(), &font_data, 0, None, false)
         else {
             return false;
         };
@@ -973,7 +989,7 @@ impl FontContext {
 
         let identifier = FontIdentifier::ArrayBuffer(Uuid::new_v4());
         let handle =
-            PlatformFont::new_from_data(identifier.clone(), &font_data, None, false).ok()?;
+            PlatformFont::new_from_data(identifier.clone(), &font_data, 0, None, false).ok()?;
 
         let new_template = FontTemplate::new(identifier.clone(), handle.descriptor(), None);
 

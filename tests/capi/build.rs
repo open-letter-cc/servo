@@ -59,6 +59,9 @@ fn main() {
         root_dir.join("components").display()
     );
     println!("cargo:rerun-if-changed={}", root_dir.join("ffi").display());
+    // The C sources compiled below; declaring any path above turns off cargo's default of
+    // rerunning when any file in this package changes, so they must be named too.
+    println!("cargo:rerun-if-changed={}", crate_dir.join("c").display());
 
     let target = env::var("TARGET").expect("TARGET should be set by cargo");
     let profile = env::var("PROFILE").expect("PROFILE should be set by cargo");
@@ -82,15 +85,20 @@ fn main() {
     //
     // NOTE: This is deliberately not inside `OUT_DIR` to avoid hitting the MAX_PATH
     // limit on Windows when building mozangle.
+    // This crate's own `multiprocess` feature, not servo-capi's - cargo sets this for
+    // every feature this crate declares, enabled or not.
+    let multiprocess = env::var("CARGO_FEATURE_MULTIPROCESS").is_ok();
+
     let cinstall_target_dir = root.join("target").join("cinstall");
     eprintln!(
-        "Running: cargo cinstall -p servo-capi --target {target} --profile {profile_name} --target-dir {} --destdir {} --prefix /",
+        "Running: cargo cinstall -p servo-capi --target {target} --profile {profile_name} --target-dir {} --destdir {} --prefix / (multiprocess={multiprocess})",
         cinstall_target_dir.display(),
         out_dir.display()
     );
 
     // Run `cargo cinstall` to build and install servo_capi library and headers into OUT_DIR.
-    let cinstall_status = Command::new("cargo")
+    let mut cinstall_command = Command::new("cargo");
+    cinstall_command
         .current_dir(&root)
         .args(["cinstall", "-p", "servo-capi"])
         .args(["--target", &target])
@@ -101,7 +109,20 @@ fn main() {
         .args(["--prefix", "/"])
         // `--meson-paths` is needed to ensure importlib is `servo_capi.lib`
         // instead of `servo_capi.dll.lib`
-        .arg("--meson-paths")
+        .arg("--meson-paths");
+    if !cfg!(target_os = "windows") {
+        // Pin the library directory: with `--meson-paths` the default can be a
+        // multiarch subdirectory on some distributions, and the link search path
+        // and rpath below assume `lib`.
+        cinstall_command.args(["--libdir", "lib"]);
+    }
+    if multiprocess {
+        // Resolves a different libservo feature set than a plain build, so this is
+        // deliberately only asked for by the `multiprocess` feature above, never by
+        // the default test run.
+        cinstall_command.args(["--features", "multiprocess"]);
+    }
+    let cinstall_status = cinstall_command
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
@@ -159,8 +180,30 @@ fn main() {
 
     // Link the test code with the C FFI cdylib.
     let lib_dir = out_dir.join("lib");
+
+    if cfg!(target_os = "macos") {
+        // cargo-c stamps the installed dylib with an absolute install name under
+        // the prefix, which is `/` here and so never resolves at run time. Point
+        // it at @rpath so the rpath below is what the loader uses.
+        let dylib = lib_dir.join("libservo_capi.dylib");
+        let status = Command::new("install_name_tool")
+            .args(["-id", "@rpath/libservo_capi.dylib"])
+            .arg(&dylib)
+            .status()
+            .expect("failed to run install_name_tool");
+        if !status.success() {
+            panic!("install_name_tool failed with status: {status}");
+        }
+    }
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=servo_capi");
+    if !cfg!(target_os = "windows") {
+        // Windows finds the DLL because it is copied next to the test binary
+        // above. ELF and Mach-O loaders search neither the link path nor the
+        // binary's directory, so the test binary carries the install dir as
+        // its rpath instead.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    }
 
     // cargo cinstall installs headers under "<prefix>/include/servo".
     // See [package.metadata.capi.header] in servo_capi/Cargo.toml.
@@ -178,4 +221,48 @@ fn main() {
         .flag_if_supported("/experimental:c11atomics")
         .include(&include_dir)
         .compile("c_integration_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_page_request.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_page_request_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_permission.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_permission_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_clipboard.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_clipboard_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_control_origin.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_control_origin_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_frame_events.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_frame_events_tests");
+
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_read_frame.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_read_frame_tests");
+
+    if multiprocess {
+        cc::Build::new()
+            .file(crate_dir.join("c").join("test_multiprocess.c"))
+            .std("c11")
+            .include(&include_dir)
+            .compile("c_multiprocess_tests");
+    }
 }

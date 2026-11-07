@@ -13,6 +13,35 @@ disallowed-coauthors = [
 [ignore]
 # Files that are ignored for all tidy and lint checks.
 files = [
+    # The fork's own separate files, under LicenseRef-OpenLetter-Tools (see
+    # LICENSES/); tidy would demand the MPL header on them.
+    "./components/script/dom/embedderrequest.rs",
+    "./components/script_bindings/webidls/EmbedderRequest.webidl",
+    "./ffi/capi-full/Cargo.toml",
+    "./ffi/capi-full/README.md",
+    "./ffi/capi-full/build.rs",
+    "./ffi/capi-full/src/native.rs",
+    "./ffi/capi-full/src/shared_surface.rs",
+    "./ffi/capi-full/src/shared_surface_tests.rs",
+    "./ffi/capi/clipboard.rs",
+    "./tests/capi/c/test_clipboard.c",
+    "./tests/capi/c/test_control_origin.c",
+    "./tests/capi/c/test_frame_events.c",
+    "./tests/capi/c/test_multiprocess.c",
+    "./tests/capi/c/test_page_request.c",
+    "./tests/capi/c/test_permission.c",
+    "./tests/capi/c/test_read_frame.c",
+    "./tests/capi/tests/c_clipboard_tests.rs",
+    "./tests/capi/tests/c_control_origin_tests.rs",
+    "./tests/capi/tests/c_frame_events_tests.rs",
+    "./tests/capi/tests/c_page_request_pref_off_tests.rs",
+    "./tests/capi/tests/c_page_request_tests.rs",
+    "./tests/capi/tests/c_permission_tests.rs",
+    "./tests/capi/tests/c_read_frame_tests.rs",
+    "./tests/capi/tests/multiprocess_containment.rs",
+    # The embedder page-request namespace has no specification: it is this
+    # fork's own, exposed behind a preference, and documented in the file.
+    "./components/script_bindings/webidls/EmbedderRequest.webidl",
     "./components/shared/net/tests/parsable_mime/text",
     "./components/default-resources/resources/hsts_preload.fstmap",
     "./tests/wpt/meta/MANIFEST.json",
@@ -45,6 +74,8 @@ directories = [
     "./tests/wpt/mozilla/tests/webgl",
     "./python/tidy/tests",
     "./python/mach",
+    # The fork's own module, under its own licence; tidy would demand an MPL header.
+    "./vendor/motor-controller",
     # Generated and upstream code combined with our own. Could use cleanup
     "./target",
     "./support/crown/target",

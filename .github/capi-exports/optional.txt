@@ -1,0 +1,56 @@
+# Copyright 2026 Open Letter, Inc.
+# SPDX-License-Identifier: LicenseRef-OpenLetter-Tools
+# Promises: resolved by the embedder if present, skipped if absent. Once a name
+# is here the fork has committed to shipping it. Add deliberately, never by
+# reflex, and in the same commit that implements the entry point.
+#
+# The twelve ffi/capi-full adds on top of ffi/capi, plus the ABI version query.
+servo_rendering_context_create_native
+servo_rendering_context_set_window
+servo_rendering_context_take_window
+servo_rendering_context_clone
+servo_webview_resize
+servo_webview_notify_input_event
+servo_webview_notify_scroll_event
+servo_webview_focus
+servo_webview_blur
+servo_webview_focused
+servo_webview_builder_set_hidpi_scale_factor
+servo_webview_set_hidpi_scale_factor
+servo_capi_abi_version
+# The second half of drawing. servo_webview_paint renders into the context's
+# surface; without present that surface is never shown.
+servo_rendering_context_present
+# Sizes the surface. servo_webview_resize sizes the page; they are different
+# sizes and the surface must be sized first.
+servo_rendering_context_resize
+# The slow path of reading a context: a CPU copy of the last presented frame, on
+# every context type. An embedder composites from it where a shared surface is
+# not available.
+servo_rendering_context_read_frame
+# Lets a library embedder service the content-process re-exec. Without it the
+# child is the host's binary, which has never heard of --content-process.
+servo_content_process_main
+# Installs the embedder's own script into every document a webview loads.
+servo_webview_builder_add_script
+servo_webview_add_script
+# Runs a script once in the document a webview shows now.
+servo_webview_evaluate_javascript
+# Accepts a script-requested new browsing context.
+servo_webview_accept_new
+# Says which feature set this payload was built with.
+servo_capi_build_features
+# An off-screen rendering context on a texture shared with one named process.
+# create_shared alone is unusable: the handle is reachable only through
+# shared_info, so the two are classified together. Exported on every platform;
+# implemented on Windows, and an error return elsewhere until each platform's
+# surface lands.
+servo_rendering_context_create_shared
+servo_rendering_context_shared_info
+servo_rendering_context_shared_add_consumer
+servo_rendering_context_shared_consumer_info
+servo_rendering_context_shared_remove_consumer
+# Answers a request_permission delegate call.
+servo_webview_respond_permission
+# Names the content process serving a webview's top-level document.
+servo_webview_content_process_id

@@ -4,15 +4,17 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use app_units::Au;
 use fonts_traits::FontIdentifier;
 use objc2_core_foundation::{
-    CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CFURL, CGFloat,
+    CFData, CFDictionary, CFIndex, CFNumber, CFRetained, CFString, CFType, CFURL, CGFloat,
 };
 use objc2_core_text::{
-    CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorFromData, kCTFontURLAttribute,
+    CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorFromData,
+    CTFontManagerCreateFontDescriptorsFromData, kCTFontURLAttribute,
     kCTFontVariationAttribute, kCTFontVariationAxisDefaultValueKey,
     kCTFontVariationAxisIdentifierKey, kCTFontVariationAxisMaximumValueKey,
     kCTFontVariationAxisMinimumValueKey,
@@ -45,7 +47,7 @@ struct CoreTextFontCacheKey {
 impl CoreTextFontCache {
     pub(crate) fn core_text_font(
         font_identifier: FontIdentifier,
-        data: Option<&FontData>,
+        data: Option<(&FontData, u32)>,
         pt_size: f64,
         synthetic_bold: bool,
     ) -> Option<PlatformFont> {
@@ -93,12 +95,31 @@ impl CoreTextFontCache {
 
     pub(crate) fn create_font_without_variations(
         font_identifier: FontIdentifier,
-        data: Option<&FontData>,
+        data: Option<(&FontData, u32)>,
         clamped_pt_size: f64,
         synthetic_bold: bool,
     ) -> Option<PlatformFont> {
-        let descriptor = match font_identifier {
-            FontIdentifier::Local(local_font_identifier) => {
+        let descriptor = match (font_identifier, data) {
+            // A local font whose bytes were supplied (by the system font service, so
+            // that this process need not open the file) is created from the data. For
+            // a collection, `face_index` was found in the main process by matching the
+            // PostScript name, in the file's face order, which is also the order
+            // CoreText returns descriptors in.
+            (FontIdentifier::Local(_), Some((data, face_index))) => {
+                let data = CFData::from_bytes(data.as_ref());
+                let descriptors = unsafe { CTFontManagerCreateFontDescriptorsFromData(&data) };
+                let count = descriptors.count();
+                if count == 0 {
+                    return None;
+                }
+                let index = (face_index as CFIndex).min(count - 1);
+                let descriptor =
+                    unsafe { descriptors.value_at_index(index) } as *mut CTFontDescriptor;
+                // SAFETY: the array owns a retained descriptor at every index below
+                // `count`; retaining it keeps it alive past the array.
+                unsafe { CFRetained::retain(NonNull::new(descriptor)?) }
+            },
+            (FontIdentifier::Local(local_font_identifier), None) => {
                 // Other platforms can instantiate a platform font by loading the data
                 // from a file and passing an index in the case the file is a TTC bundle.
                 // The only way to reliably load the correct font from a TTC bundle on
@@ -117,10 +138,8 @@ impl CoreTextFontCache {
                     );
                 unsafe { descriptor.copy_with_attributes(attributes.as_opaque()) }
             },
-            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => {
-                let data = data
-                    .expect("Should always have FontData for web fonts")
-                    .clone();
+            (FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_), data) => {
+                let (data, _) = data.expect("Should always have FontData for web fonts");
                 let data = CFData::from_bytes(data.as_ref());
                 unsafe { CTFontManagerCreateFontDescriptorFromData(&data)? }
             },

@@ -1,0 +1,167 @@
+# Copyright 2026 Open Letter, Inc.
+# SPDX-License-Identifier: LicenseRef-OpenLetter-Tools
+name: Build, gate and test the C ABI payload on a Unix-like target
+description: >-
+  The steps every non-Windows job of the Motor Controller workflow shares, after
+  its own checkout and bootstrap: build the shim and servoshell in one
+  invocation, stage the payload under its shipped name, check the export surface
+  against the shared name lists, record the digest, upload, then run the capi
+  unit tests and the C suite, and last build the motor-controller seam.
+
+inputs:
+  platform:
+    description: Artifact name infix, e.g. linux-x64, macos-arm64.
+    required: true
+  lib-ext:
+    description: Shared library extension on this target (so or dylib).
+    required: true
+  singleprocess:
+    description: Build without the multiprocess feature.
+    required: false
+    default: "false"
+  sandbox:
+    description: >-
+      Run the C suite's content processes with the sandbox on. Only meaningful
+      with multiprocess; proves the platform's sandbox arms end to end.
+    required: false
+    default: "false"
+  xvfb:
+    description: Run the C suite under a virtual X server.
+    required: false
+    default: "false"
+  target:
+    description: Cross-compilation target triple; empty for the host.
+    required: false
+    default: ""
+  run-tests:
+    description: Run the unit tests and the C suite (off for a cross build).
+    required: false
+    default: "true"
+  nm:
+    description: nm binary for the export gate; the host's by default.
+    required: false
+    default: "nm"
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve build settings
+      shell: bash
+      run: |
+        variant=multiprocess
+        shim_features="--features servo-capi-full/multiprocess"
+        test_features="--features multiprocess"
+        if [ "${{ inputs.singleprocess }}" = "true" ]; then
+          variant=singleprocess
+          shim_features=""
+          test_features=""
+        fi
+        target_flag=""
+        rel="$CARGO_TARGET_DIR/release"
+        if [ -n "${{ inputs.target }}" ]; then
+          target_flag="--target ${{ inputs.target }}"
+          rel="$CARGO_TARGET_DIR/${{ inputs.target }}/release"
+        fi
+        {
+          echo "CAPI_VARIANT=$variant"
+          echo "CAPI_SHIM_FEATURES=$shim_features"
+          echo "CAPI_TEST_FEATURES=$test_features"
+          echo "CAPI_TARGET_FLAG=$target_flag"
+          echo "CAPI_REL=$rel"
+          echo "CAPI_LIB=$rel/libservo.${{ inputs.lib-ext }}"
+          echo "CAPI_ARTIFACT=libservo-${{ inputs.platform }}-${{ inputs.lib-ext }}-$variant"
+        } >> "$GITHUB_ENV"
+
+    # Same single invocation and feature reasoning as the Windows job: the shim
+    # and servoshell resolve one libservo feature set, and the multiprocess
+    # feature is named on the shim because servoshell does not declare it.
+    # servoshell is pinned to `default_base` so that upstream's new default
+    # `media-gstreamer` feature does not reach the payload through the shared
+    # libservo resolution (the Windows job explains this at length).
+    - name: Build libservo C ABI shared library and servoshell (release)
+      shell: bash
+      run: cargo build -p servo-capi-full -p servoshell --release --no-default-features --features servoshell/default_base $CAPI_TARGET_FLAG $CAPI_SHIM_FEATURES
+
+    - name: Stage libservo.${{ inputs.lib-ext }}
+      shell: bash
+      run: |
+        cp "$CAPI_REL/libservo_capi_full.${{ inputs.lib-ext }}" "$CAPI_LIB"
+        ls -l "$CAPI_LIB"
+
+    # The same gate as the Windows job, from the same name lists, against the
+    # dynamic symbol table. 42 is the same floor for the same reason.
+    - name: Check the export surface
+      shell: bash
+      run: NM="${{ inputs.nm }}" bash .github/capi-exports/check.sh "$CAPI_LIB" 42
+
+    - name: Record SHA-256
+      shell: bash
+      run: |
+        if command -v sha256sum >/dev/null; then
+          hash=$(sha256sum "$CAPI_LIB" | cut -d' ' -f1)
+        else
+          hash=$(shasum -a 256 "$CAPI_LIB" | cut -d' ' -f1)
+        fi
+        echo "$hash  $(basename "$CAPI_LIB")"
+        {
+          echo "## $CAPI_ARTIFACT"
+          echo
+          echo "Commit \`$GITHUB_SHA\`, run \`$GITHUB_RUN_ID\`."
+          echo
+          echo "| File | SHA-256 |"
+          echo "| :--- | :--- |"
+          echo "| \`$(basename "$CAPI_LIB")\` | \`$hash\` |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.CAPI_ARTIFACT }}
+        path: |
+          ${{ env.CAPI_LIB }}
+          resources/
+          ffi/capi-full/NOTICE.md
+          LICENSES/
+        if-no-files-found: error
+        retention-days: 30
+
+    # The gate for a step of the ladder: the capi unit tests and the whole C
+    # suite on the software rendering context, frame read back included. After
+    # the upload so a test failure cannot cost the run its artifact.
+    #
+    # The unit tests run in release with the payload's own feature so they reuse
+    # the build above. The C suite is a second libservo build regardless
+    # (cargo-c builds into its own target/cinstall), in the debug profile like
+    # the Windows job; with the multiprocess feature on it includes the
+    # containment test, so no third build is paid for.
+    - name: Test servo-capi (unit)
+      if: ${{ inputs.run-tests == 'true' }}
+      shell: bash
+      run: cargo test -p servo-capi --release $CAPI_TEST_FEATURES
+
+    - name: Install cargo-c
+      if: ${{ inputs.run-tests == 'true' }}
+      shell: bash
+      run: cargo install cargo-c --locked
+
+    - name: Test the C suite (software context, read back${{ inputs.sandbox == 'true' && ', sandbox on' || '' }})
+      if: ${{ inputs.run-tests == 'true' }}
+      shell: bash
+      env:
+        SERVO_CAPI_TEST_SANDBOX: ${{ inputs.sandbox == 'true' && '1' || '' }}
+      run: |
+        prefix=""
+        if [ "${{ inputs.xvfb }}" = "true" ]; then prefix="xvfb-run -a"; fi
+        $prefix cargo test -p servo-capi-tests $CAPI_TEST_FEATURES
+
+    # Last, so a failure here cannot cost the run its artifact.
+    - name: Build motor-controller against real libservo (release)
+      if: ${{ inputs.run-tests == 'true' }}
+      shell: bash
+      working-directory: vendor/motor-controller
+      # The seam asks libservo for the same features the capi crates do (see its
+      # Cargo.toml), so mozjs resolves with its `jit` feature and takes the
+      # prebuilt SpiderMonkey, as the payload build above did. Without that
+      # alignment this step builds SpiderMonkey from source and needs a build
+      # toolchain the runner does not have.
+      run: cargo build -p motor-controller --features servo-backend --release

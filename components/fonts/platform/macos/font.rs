@@ -108,7 +108,7 @@ impl PlatformFont {
 
     fn new(
         font_identifier: FontIdentifier,
-        data: Option<&FontData>,
+        data: Option<(&FontData, u32)>,
         requested_size: Option<Au>,
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str> {
@@ -246,10 +246,16 @@ impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
         font_identifier: FontIdentifier,
         data: &FontData,
+        face_index: u32,
         requested_size: Option<Au>,
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str> {
-        Self::new(font_identifier, Some(data), requested_size, synthetic_bold)
+        Self::new(
+            font_identifier,
+            Some((data, face_index)),
+            requested_size,
+            synthetic_bold,
+        )
     }
 
     fn new_from_local_font_identifier(

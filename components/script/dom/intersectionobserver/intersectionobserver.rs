@@ -964,6 +964,9 @@ fn compute_the_intersection(
 
                     intersection_rect = intersect_rectangle(&intersection_rect, &viewport_rect)?;
 
+                    // Note: a frame container without a padding box (for example, one whose transform
+                    // leaves no box to report) cannot be mapped through, so treat the target as not
+                    // intersecting rather than panicking.
                     let current_offset = frame_container
                         .upcast::<Node>()
                         .padding_box(cx)?

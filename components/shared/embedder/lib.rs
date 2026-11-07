@@ -36,9 +36,9 @@ use servo_base::Epoch;
 use servo_base::generic_channel::{
     GenericCallback, GenericSender, GenericSharedMemory, SendResult,
 };
-use servo_base::id::{PipelineId, WebViewId};
+use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_geometry::{DeviceIndependentIntRect, DeviceIndependentIntSize};
-use servo_url::ServoUrl;
+use servo_url::{ImmutableOrigin, ServoUrl};
 use strum::{EnumMessage, IntoStaticStr};
 use style::queries::values::PrefersColorScheme;
 use style_traits::CSSPixel;
@@ -515,11 +515,26 @@ pub enum EmbedderMsg {
         Vec<BluetoothDeviceDescription>,
         GenericSender<Option<String>>,
     ),
-    /// Open interface to request permission specified by prompt.
-    PromptPermission(WebViewId, PermissionFeature, GenericSender<AllowOrDeny>),
+    /// Open interface to request permission specified by prompt. The origin is that of
+    /// the global requesting the permission, which may be a nested frame, and the
+    /// browsing context is that global's frame, `None` for a global that has none.
+    PromptPermission(
+        WebViewId,
+        PermissionFeature,
+        ImmutableOrigin,
+        Option<BrowsingContextId>,
+        GenericSender<AllowOrDeny>,
+    ),
     /// Request permission without blocking the script thread. The callback is invoked with the user's
-    /// decision once it is known.
-    RequestPermission(WebViewId, PermissionFeature, GenericCallback<AllowOrDeny>),
+    /// decision once it is known. The origin and browsing context are those of the
+    /// requesting global, as for `PromptPermission`.
+    RequestPermission(
+        WebViewId,
+        PermissionFeature,
+        ImmutableOrigin,
+        Option<BrowsingContextId>,
+        GenericCallback<AllowOrDeny>,
+    ),
     /// Request a single geographic position fix. The callback is invoked exactly once.
     RequestGeolocationPosition(
         WebViewId,
@@ -555,9 +570,21 @@ pub enum EmbedderMsg {
     /// <https://developer.mozilla.org/en-US/docs/Web/API/Console_API>
     ShowConsoleApiMessage(Option<WebViewId>, ConsoleLogLevel, String),
     /// Request to the embedder to display a user interace control.
-    ShowEmbedderControl(EmbedderControlId, DeviceIntRect, EmbedderControlRequest),
+    /// The origin is that of the document that asked for the control, which may be a
+    /// nested frame's.
+    ShowEmbedderControl(
+        EmbedderControlId,
+        DeviceIntRect,
+        EmbedderControlRequest,
+        ImmutableOrigin,
+    ),
     /// Request to the embedder to hide a user interface control.
     HideEmbedderControl(EmbedderControlId),
+    /// A frame was created: its browsing context, its parent's (`None` for a top-level
+    /// frame), and its initial URL. Sent where the browsing context is allocated, before
+    /// any script can run in it, and on the same channel as everything that frame's
+    /// script later sends, so it reaches the embedder first.
+    FrameCreated(WebViewId, BrowsingContextId, Option<BrowsingContextId>, ServoUrl),
     /// Inform the embedding layer that a particular `InputEvent` was handled by Servo
     /// and the embedder can continue processing it, if necessary.
     InputEventsHandled(WebViewId, Vec<InputEventOutcome>),

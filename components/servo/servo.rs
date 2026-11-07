@@ -15,14 +15,19 @@ use env_logger::Builder as EnvLoggerBuilder;
 use fonts::SystemFontService;
 #[cfg(all(
     feature = "multiprocess",
-    not(target_os = "windows"),
-    not(target_os = "ios"),
-    not(target_os = "android"),
-    not(target_arch = "arm"),
-    not(target_arch = "aarch64"),
-    not(target_arch = "riscv32"),
-    not(target_arch = "riscv64"),
-    not(target_env = "ohos"),
+    any(
+        target_os = "macos",
+        all(
+            not(target_os = "windows"),
+            not(target_os = "ios"),
+            not(target_os = "android"),
+            not(target_arch = "arm"),
+            not(target_arch = "aarch64"),
+            not(target_arch = "riscv32"),
+            not(target_arch = "riscv64"),
+            not(target_env = "ohos"),
+        )
+    ),
 ))]
 use gaol::sandbox::{ChildSandbox, ChildSandboxMethods};
 #[cfg(feature = "multiprocess")]
@@ -68,14 +73,19 @@ use servo_config::{opts, pref, prefs};
 use servo_constellation::UnprivilegedContent;
 #[cfg(all(
     feature = "multiprocess",
-    not(target_os = "windows"),
-    not(target_os = "ios"),
-    not(target_os = "android"),
-    not(target_arch = "arm"),
-    not(target_arch = "aarch64"),
-    not(target_arch = "riscv32"),
-    not(target_arch = "riscv64"),
-    not(target_env = "ohos"),
+    any(
+        target_os = "macos",
+        all(
+            not(target_os = "windows"),
+            not(target_os = "ios"),
+            not(target_os = "android"),
+            not(target_arch = "arm"),
+            not(target_arch = "aarch64"),
+            not(target_arch = "riscv32"),
+            not(target_arch = "riscv64"),
+            not(target_env = "ohos"),
+        )
+    ),
 ))]
 use servo_constellation::content_process_sandbox_profile;
 use servo_constellation::{
@@ -112,7 +122,8 @@ use crate::site_data_manager::{CookieOperationResponse, SiteDataManager};
 use crate::webview::{MINIMUM_WEBVIEW_SIZE, WebView, WebViewInner};
 use crate::webview_delegate::{
     AllowOrDenyRequest, AuthenticationRequest, BluetoothDeviceSelectionRequest, EmbedderControl,
-    FilePicker, NavigationRequest, PermissionRequest, ProtocolHandlerRegistration, WebResourceLoad,
+    FilePicker, FrameEvent, FrameEventKind, NavigationRequest, PermissionRequest,
+    ProtocolHandlerRegistration, WebResourceLoad,
 };
 
 #[cfg(all(
@@ -230,6 +241,13 @@ impl<'a> EmbedderMessageSelector<'a> {
         skip_all
     )]
     fn try_recv_one_message(&mut self) -> Option<Message> {
+        // Messages from script and from `Servo` itself are taken first whenever both kinds
+        // are waiting. A frame is announced on this channel before the constellation can
+        // report anything about it, so this keeps that order on delivery: an arbitrary
+        // pick could hand the embedder a frame's navigation before its creation.
+        if let Ok(message) = self.receivers.0.try_recv() {
+            return Some(Message::FromUnknown(message));
+        }
         let operation = self.select.try_select().ok()?;
         let index = operation.index();
         if index == 0 {
@@ -257,6 +275,9 @@ struct ServoInner {
     delegate: RefCell<Rc<dyn ServoDelegate>>,
     paint: Rc<RefCell<Paint>>,
     constellation_proxy: ConstellationProxy,
+    /// A sender onto `embedder_receiver`, for `Servo`'s own messages that must keep their
+    /// order relative to everything script sends there.
+    embedder_proxy: EmbedderProxy,
     embedder_receiver: Receiver<EmbedderMsg>,
     net_embedder_receiver: Receiver<NetToEmbedderMsg>,
     constellation_embedder_receiver: Receiver<ConstellationToEmbedderMsg>,
@@ -464,13 +485,14 @@ impl ServoInner {
                     return;
                 }
                 if let Some(webview) = self.get_webview_handle(control_id.webview_id) {
-                    webview.delegate().show_embedder_control(
-                        webview,
+                    let requester_origin = file_picker_request.origin.clone();
+                    webview.dispatch_embedder_control(
                         EmbedderControl::FilePicker(FilePicker {
                             id: control_id,
                             file_picker_request,
                             response_sender: Some(response_sender),
                         }),
+                        Some(&requester_origin),
                     );
                 }
             },
@@ -556,9 +578,9 @@ impl ServoInner {
             },
             EmbedderMsg::ShowSimpleDialog(webview_id, simple_dialog) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
-                    webview.delegate().show_embedder_control(
-                        webview,
+                    webview.dispatch_embedder_control(
                         EmbedderControl::SimpleDialog(simple_dialog.into()),
+                        None,
                     );
                 }
             },
@@ -668,10 +690,18 @@ impl ServoInner {
                     );
                 }
             },
-            EmbedderMsg::PromptPermission(webview_id, requested_feature, response_sender) => {
+            EmbedderMsg::PromptPermission(
+                webview_id,
+                requested_feature,
+                requester_origin,
+                requester_browsing_context_id,
+                response_sender,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
                     let permission_request = PermissionRequest {
                         requested_feature,
+                        requester_origin,
+                        requester_browsing_context_id,
                         allow_deny_request: AllowOrDenyRequest::new(
                             response_sender,
                             AllowOrDeny::Deny,
@@ -683,10 +713,18 @@ impl ServoInner {
                         .request_permission(webview, permission_request);
                 }
             },
-            EmbedderMsg::RequestPermission(webview_id, requested_feature, callback) => {
+            EmbedderMsg::RequestPermission(
+                webview_id,
+                requested_feature,
+                requester_origin,
+                requester_browsing_context_id,
+                callback,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
                     let permission_request = PermissionRequest {
                         requested_feature,
+                        requester_origin,
+                        requester_browsing_context_id,
                         allow_deny_request: AllowOrDenyRequest::new_from_callback(
                             callback,
                             AllowOrDeny::Deny,
@@ -794,9 +832,33 @@ impl ServoInner {
                     None => self.delegate.borrow().show_console_message(level, message),
                 }
             },
-            EmbedderMsg::ShowEmbedderControl(control_id, position, embedder_control_request) => {
+            EmbedderMsg::ShowEmbedderControl(
+                control_id,
+                position,
+                embedder_control_request,
+                requester_origin,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(control_id.webview_id) {
-                    webview.show_embedder_control(control_id, position, embedder_control_request);
+                    webview.show_embedder_control(
+                        control_id,
+                        position,
+                        embedder_control_request,
+                        requester_origin,
+                    );
+                }
+            },
+            EmbedderMsg::FrameCreated(webview_id, browsing_context_id, parent, url) => {
+                if let Some(webview) = self.get_webview_handle(webview_id) {
+                    webview.delegate().notify_frame_changed(
+                        webview,
+                        FrameEvent {
+                            browsing_context_id,
+                            parent_browsing_context_id: parent,
+                            kind: FrameEventKind::Created,
+                            url: Some(url.into_url()),
+                            content_process_id: None,
+                        },
+                    );
                 }
             },
             EmbedderMsg::HideEmbedderControl(control_id) => {
@@ -926,6 +988,40 @@ impl ServoInner {
                     webview.set_history(new_back_forward_list, current_list_index);
                 }
             },
+            ConstellationToEmbedderMsg::FrameNavigated(
+                webview_id,
+                browsing_context_id,
+                parent,
+                url,
+                content_process_id,
+            ) => {
+                if let Some(webview) = self.get_webview_handle(webview_id) {
+                    webview.delegate().notify_frame_changed(
+                        webview,
+                        FrameEvent {
+                            browsing_context_id,
+                            parent_browsing_context_id: parent,
+                            kind: FrameEventKind::Navigated,
+                            url: Some(url.into_url()),
+                            content_process_id,
+                        },
+                    );
+                }
+            },
+            ConstellationToEmbedderMsg::FrameRemoved(webview_id, browsing_context_id, parent) => {
+                if let Some(webview) = self.get_webview_handle(webview_id) {
+                    webview.delegate().notify_frame_changed(
+                        webview,
+                        FrameEvent {
+                            browsing_context_id,
+                            parent_browsing_context_id: parent,
+                            kind: FrameEventKind::Removed,
+                            url: None,
+                            content_process_id: None,
+                        },
+                    );
+                }
+            },
             ConstellationToEmbedderMsg::Panic(webview_id, reason, backtrace) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
                     webview
@@ -1023,6 +1119,7 @@ impl Servo {
         let (paint_proxy, paint_receiver) = create_paint_channel(event_loop_waker.clone());
         let (constellation_proxy, embedder_to_constellation_receiver) = ConstellationProxy::new();
         let (embedder_proxy, embedder_receiver) = create_embedder_channel(event_loop_waker.clone());
+        let own_embedder_proxy = embedder_proxy.clone();
         let (net_embedder_proxy, net_embedder_receiver) =
             create_generic_embedder_channel::<NetToEmbedderMsg>(event_loop_waker.clone());
         let (constellation_embedder_proxy, constellation_embedder_receiver) =
@@ -1130,6 +1227,7 @@ impl Servo {
                 constellation_proxy.clone(),
             ))),
             constellation_proxy,
+            embedder_proxy: own_embedder_proxy,
             embedder_receiver,
             net_embedder_receiver,
             constellation_embedder_receiver,
@@ -1145,6 +1243,10 @@ impl Servo {
 
     pub fn delegate(&self) -> Rc<dyn ServoDelegate> {
         self.0.delegate.borrow().clone()
+    }
+
+    pub(crate) fn embedder_proxy(&self) -> &EmbedderProxy {
+        &self.0.embedder_proxy
     }
 
     pub fn set_delegate(&self, delegate: Rc<dyn ServoDelegate>) {
@@ -1494,16 +1596,24 @@ pub fn run_content_process(token: String) {
     }
 }
 
+// The platform set here mirrors `content_process_sandbox_profile` in the
+// constellation: Apple arm devices are sandboxed like Intel Macs, every other
+// arm64 target is not.
 #[cfg(all(
     feature = "multiprocess",
-    not(target_os = "windows"),
-    not(target_os = "ios"),
-    not(target_os = "android"),
-    not(target_arch = "arm"),
-    not(target_arch = "aarch64"),
-    not(target_arch = "riscv32"),
-    not(target_arch = "riscv64"),
-    not(target_env = "ohos"),
+    any(
+        target_os = "macos",
+        all(
+            not(target_os = "windows"),
+            not(target_os = "ios"),
+            not(target_os = "android"),
+            not(target_arch = "arm"),
+            not(target_arch = "aarch64"),
+            not(target_arch = "riscv32"),
+            not(target_arch = "riscv64"),
+            not(target_env = "ohos"),
+        )
+    ),
 ))]
 fn create_sandbox() {
     ChildSandbox::new(content_process_sandbox_profile())
@@ -1516,7 +1626,7 @@ fn create_sandbox() {
     target_os = "ios",
     target_os = "android",
     target_arch = "arm",
-    target_arch = "aarch64",
+    all(target_arch = "aarch64", not(target_os = "macos")),
     target_arch = "riscv32",
     target_arch = "riscv64",
     target_env = "ohos",

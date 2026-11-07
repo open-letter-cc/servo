@@ -4639,9 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "ipc-channel"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf1d9c442a2ec790209da8a49f99f7dae0fad31ba24c9947b01ce5e8de8bddcb"
+version = "0.23.0"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -8423,12 +8421,32 @@ dependencies = [
 name = "servo-capi"
 version = "0.8.0"
 dependencies = [
+ "arboard",
  "dpi",
  "euclid",
  "libc",
  "log",
  "servo",
  "url",
+]
+
+[[package]]
+name = "servo-capi-full"
+version = "0.8.0"
+dependencies = [
+ "arboard",
+ "dpi",
+ "euclid",
+ "gleam",
+ "glow",
+ "libc",
+ "log",
+ "raw-window-handle",
+ "servo",
+ "surfman",
+ "url",
+ "winapi",
+ "wio",
 ]
 
 [[package]]
@@ -9222,7 +9240,6 @@ dependencies = [
  "servo-url",
  "servo_arc",
  "smallvec",
- "tempfile",
  "time",
  "tokio",
  "tokio-rustls",

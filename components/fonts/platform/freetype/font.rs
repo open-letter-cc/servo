@@ -67,21 +67,29 @@ pub struct PlatformFont {
 
 impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
-        _font_identifier: FontIdentifier,
+        font_identifier: FontIdentifier,
         font_data: &FontData,
+        face_index: u32,
         requested_size: Option<Au>,
         synthetic_bold: bool,
     ) -> Result<PlatformFont, &'static str> {
+        // A local identifier knows its named instance as well as its face, which
+        // FreeType wants packed into one index; the plain index is for the tables.
+        let (freetype_face_index, face_index) = match &font_identifier {
+            FontIdentifier::Local(local) => (local.face_index_for_freetype(), local.index()),
+            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => (face_index, face_index),
+        };
         let library = FreeTypeLibraryHandle::get().lock();
         let data = FontBackingStore::Web(font_data.clone());
-        let face = FreeTypeFace::new_from_memory(&library, data, 0)?;
+        let face = FreeTypeFace::new_from_memory(&library, data, freetype_face_index)?;
 
         let (requested_face_size, actual_face_size) = match requested_size {
             Some(requested_size) => (requested_size, face.set_size(requested_size)?),
             None => (Au::zero(), Au::zero()),
         };
 
-        let table_provider_data = FreeTypeFaceTableProviderData::Web(font_data.clone());
+        let table_provider_data =
+            FreeTypeFaceTableProviderData::Web(font_data.clone(), face_index);
 
         let synthetic_bold = table_provider_data.should_apply_synthetic_bold(synthetic_bold);
 
@@ -422,14 +430,16 @@ impl PlatformFont {
 
 #[derive(Clone)]
 enum FreeTypeFaceTableProviderData {
-    Web(FontData),
+    Web(FontData, u32),
     Local(Arc<Mmap>, u32),
 }
 
 impl FreeTypeFaceTableProviderData {
     fn font_ref(&self) -> Result<FontRef<'_>, ReadError> {
         match self {
-            Self::Web(ipc_shared_memory) => FontRef::new(ipc_shared_memory.as_ref()),
+            Self::Web(ipc_shared_memory, index) => {
+                FontRef::from_index(ipc_shared_memory.as_ref(), *index)
+            },
             Self::Local(mmap, index) => FontRef::from_index(mmap, *index),
         }
     }

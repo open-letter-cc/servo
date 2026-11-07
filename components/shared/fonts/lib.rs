@@ -108,6 +108,16 @@ pub struct FontDataAndIndex {
     pub index: u32,
 }
 
+impl std::fmt::Debug for FontDataAndIndex {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FontDataAndIndex")
+            .field("len", &self.data.as_ref().len())
+            .field("index", &self.index)
+            .finish()
+    }
+}
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum FontDataError {
     FailedToLoad,

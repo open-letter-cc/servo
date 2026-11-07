@@ -13,6 +13,24 @@ description = "Integration tests for C API of servo"
 name = "servo_capi_tests"
 path = "lib.rs"
 
+[features]
+# Builds servo-capi with its own `multiprocess` feature on and runs the
+# containment test against a real content process. Off by default, like the
+# feature itself: it is a separate, much more expensive build (see build.rs),
+# not something the default `cargo test -p servo-capi-tests` should pay for.
+multiprocess = []
+
 [build-dependencies]
 cc = "1"
+
+[[test]]
+name = "multiprocess_containment"
+path = "tests/multiprocess_containment.rs"
+# The content-process re-exec in `components/constellation/sandboxing.rs` relaunches
+# `env::current_exe()` with `--content-process <token>` and expects *that exact
+# process* to recognise the flag. libtest's generated `main` parses its own argv and
+# would reject that flag before this test ever ran, so this test supplies its own
+# `main` instead, as a library embedder's own binary has to.
+harness = false
+required-features = ["multiprocess"]
 

@@ -1,0 +1,3 @@
+[submodule "vendor/motor-controller"]
+	url = https://github.com/open-letter-cc/motor-controller.git
+	path = vendor/motor-controller

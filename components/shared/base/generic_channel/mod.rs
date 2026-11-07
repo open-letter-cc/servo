@@ -229,9 +229,11 @@ impl<T: Serialize> GenericSender<T> {
     #[inline]
     pub fn send(&self, msg: T) -> SendResult {
         match &self.0 {
-            GenericSenderVariants::Ipc(sender) => sender
-                .send(msg)
-                .map_err(|e| SendError::SerializationError(e.to_string())),
+            // `From<IpcError>` maps an I/O failure or a closed channel to
+            // `Disconnected`. Folding every error into `SerializationError` hid a
+            // peer that had died: callers checking for `Disconnected` to decide
+            // that a pipeline is gone then waited forever for its reply.
+            GenericSenderVariants::Ipc(sender) => sender.send(msg).map_err(SendError::from),
             GenericSenderVariants::Crossbeam(sender) => {
                 sender.send(Ok(msg)).map_err(|_| SendError::Disconnected)
             },

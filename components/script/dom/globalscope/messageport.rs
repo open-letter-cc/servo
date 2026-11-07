@@ -335,6 +335,12 @@ impl MessagePortMethods<crate::DomTypeHolder> for MessagePort {
 
     /// <https://html.spec.whatwg.org/multipage/#dom-messageport-close>
     fn Close(&self, cx: &mut JSContext) {
+        // Note: a port already closed, or transferred away, is no longer known to the
+        // global and has nothing left to disentangle; closing it again is a no-op.
+        if self.detached.get() {
+            return;
+        }
+
         // Set this's [[Detached]] internal slot value to true.
         self.detached.set(true);
 

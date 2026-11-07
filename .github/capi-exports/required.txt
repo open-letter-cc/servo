@@ -1,0 +1,48 @@
+# Copyright 2026 Open Letter, Inc.
+# SPDX-License-Identifier: LicenseRef-OpenLetter-Tools
+# All thirty. Absence of any one of these fails the embedder's library load
+# outright, so every one is checked by name. Enumerated from the embedder's
+# binding rather than reconstructed here, and every name verified present in a
+# built payload's export table before landing.
+#
+# Two entries that look odd and are not:
+#
+#   servo_rendering_context_create_software is required while create_native is
+#   optional. It is the fallback surface and the one entry point that cannot
+#   itself depend on ANGLE having loaded. It is also the older of the two, so an
+#   older payload has software and not native, which is exactly the direction
+#   the optional class exists to tolerate.
+#
+#   servo_webview_take_screenshot is load-bearing beyond its name: it is how the
+#   embedder distinguishes "the engine is not drawing" from "the engine draws
+#   and nothing is presented".
+servo_builder_build
+servo_builder_create
+servo_builder_free
+servo_builder_set_event_loop_waker
+servo_builder_set_options
+servo_builder_set_preferences
+servo_free
+servo_options_create
+servo_options_free
+servo_options_set_config_dir
+servo_options_set_debug_option
+servo_options_set_hard_fail
+servo_options_set_multiprocess
+servo_options_set_sandbox
+servo_preferences_create
+servo_preferences_free
+servo_preferences_set_bool
+servo_rendering_context_create_software
+servo_rendering_context_free
+servo_setup_logging
+servo_spin_event_loop
+servo_webview_builder_build
+servo_webview_builder_create
+servo_webview_builder_free
+servo_webview_builder_set_delegate
+servo_webview_builder_set_url
+servo_webview_free
+servo_webview_load
+servo_webview_paint
+servo_webview_take_screenshot

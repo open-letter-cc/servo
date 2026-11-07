@@ -1,0 +1,15 @@
+# Copyright 2026 Open Letter, Inc.
+# SPDX-License-Identifier: LicenseRef-OpenLetter-Tools
+# Sequencing tripwire. A symbol cannot be gated before it exists, so a planned
+# entry point cannot be named in required.txt or optional.txt in advance. This
+# list closes the hole from the other side: a symbol here that appears in the
+# payload without being classified fails the job. Inert until the symbol ships.
+#
+# Both entries below are now implemented and classified; they stay as the record
+# of what was promised before it existed. Add future planned entry points here.
+#
+# servo_rendering_context_make_current is deliberately NOT listed. It is exported
+# and needed by the paint/present sequence, but the embedder's binding does not
+# declare it yet; gating it would promise a symbol nobody resolves.
+servo_rendering_context_present
+servo_rendering_context_resize
