@@ -13,6 +13,7 @@ unsafe extern "C" {
     fn run_c_frame_events_tests() -> i32;
     fn run_c_read_frame_tests() -> i32;
     fn run_c_resource_request_tests() -> i32;
+    fn run_c_resize_tests() -> i32;
 }
 
 #[cfg(feature = "multiprocess")]
@@ -63,6 +64,11 @@ pub fn c_read_frame_tests() {
 pub fn c_resource_request_tests() {
     let result = unsafe { run_c_resource_request_tests() };
     assert_eq!(result, 0, "C resource request tests failed");
+}
+
+pub fn c_resize_tests() {
+    let result = unsafe { run_c_resize_tests() };
+    assert_eq!(result, 0, "C resize tests failed");
 }
 
 /// `port` must serve the pages `test_control_origin.c` loads.

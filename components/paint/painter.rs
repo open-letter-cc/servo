@@ -92,6 +92,12 @@ pub(crate) struct Painter {
     /// The number of frames pending to receive from WebRender.
     pub(crate) pending_frames: Cell<usize>,
 
+    /// The number of frames still to receive from WebRender before the one requested by
+    /// the last [`Self::resize_rendering_context`] has arrived, counting that one. Frames
+    /// arrive in the order they were requested, so this is the number pending when the
+    /// resize requested its frame. No repaint is announced until it is zero.
+    frames_before_resized_frame: Cell<usize>,
+
     /// The [`BaseRefreshDriver`] which manages the painting of `WebView`s during animations.
     refresh_driver: Rc<BaseRefreshDriver>,
 
@@ -283,6 +289,7 @@ impl Painter {
             rendering_context,
             needs_repaint: Cell::default(),
             pending_frames: Default::default(),
+            frames_before_resized_frame: Default::default(),
             screenshot_taker: Default::default(),
             refresh_driver,
             animation_refresh_driver_observer,
@@ -376,6 +383,15 @@ impl Painter {
     pub(crate) fn needs_repaint(&self) -> bool {
         let repaint_reason = self.needs_repaint.get();
         if repaint_reason.is_empty() {
+            return false;
+        }
+
+        // A resize replaces the rendering context's surface and asks WebRender for a
+        // frame at the new size, which is still being built when the resize returns.
+        // Announcing a repaint before that frame lands, for whatever reason, has the
+        // embedder paint the frame from before the resize into the resized surface: the
+        // area that existed is drawn and the area the resize added is only cleared.
+        if self.frames_before_resized_frame.get() != 0 {
             return false;
         }
 
@@ -838,6 +854,8 @@ impl Painter {
 
     pub(crate) fn decrement_pending_frames(&self) {
         self.pending_frames.set(self.pending_frames.get() - 1);
+        self.frames_before_resized_frame
+            .set(self.frames_before_resized_frame.get().saturating_sub(1));
     }
 
     pub(crate) fn report_memory(&self) -> MemoryReport {
@@ -1410,6 +1428,9 @@ impl Painter {
         self.send_transaction(transaction);
 
         self.send_root_pipeline_display_list();
+        // That requested the frame for the new size, after every frame still pending.
+        self.frames_before_resized_frame
+            .set(self.pending_frames.get());
         self.set_needs_repaint(RepaintReason::Resize);
     }
 

@@ -264,6 +264,12 @@ fn main() {
         .include(&include_dir)
         .compile("c_resource_request_tests");
 
+    cc::Build::new()
+        .file(crate_dir.join("c").join("test_resize.c"))
+        .std("c11")
+        .include(&include_dir)
+        .compile("c_resize_tests");
+
     if multiprocess {
         cc::Build::new()
             .file(crate_dir.join("c").join("test_multiprocess.c"))
