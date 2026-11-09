@@ -9,10 +9,10 @@ use std::panic::{self, AssertUnwindSafe};
 
 pub use servo_api::LoadStatus;
 use servo_api::{
-    AllowOrDenyRequest, BrowsingContextId, ContextMenuAction, FrameEvent, FrameEventKind,
-    ImmutableOrigin, CreateNewWebViewRequest, Cursor, DeviceIntPoint,
-    DeviceIntSize, EmbedderControl, EmbedderControlTag, NavigationRequest, PermissionRequest,
-    SelectElementOptionOrOptgroup, UserContentManager, WebView, WebViewDelegate, WebViewId,
+    AllowOrDenyRequest, BrowsingContextId, ContextMenuAction, CreateNewWebViewRequest, Cursor,
+    DeviceIntPoint, DeviceIntSize, EmbedderControl, EmbedderControlTag, FrameEvent, FrameEventKind,
+    ImmutableOrigin, NavigationRequest, PermissionRequest, SelectElementOptionOrOptgroup,
+    UserContentManager, WebResourceLoad, WebResourceResponse, WebView, WebViewDelegate, WebViewId,
 };
 
 use crate::rendering_context::RenderingContext;
@@ -416,6 +416,174 @@ const _: () = assert!(
     "ServoWebViewDelegate must stay 152 bytes wide"
 );
 
+impl ServoWebViewDelegate {
+    /// A delegate with every callback `NULL` and no `user_data`, which keeps Servo's
+    /// default for everything: each callback's `NULL` path is that default.
+    pub(crate) fn empty() -> Self {
+        // SAFETY: Every field is a raw pointer or an `Option` of a function pointer, for
+        // which all-zero bytes are a valid `NULL` / `None`.
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+/// A request for a top-level document, in [`ServoResourceRequest::kind`].
+pub const SERVO_RESOURCE_REQUEST_TOP_LEVEL_NAVIGATION: u8 = 1;
+/// A request for a document in a nested frame: an `<iframe>` or `<frame>` loading its
+/// `src`, or a navigation inside one.
+pub const SERVO_RESOURCE_REQUEST_FRAME_NAVIGATION: u8 = 2;
+/// Any other request a document or a dedicated or shared worker makes: images, scripts,
+/// styles, fonts, `fetch()`, `XMLHttpRequest`, WebSocket handshakes, and the like.
+pub const SERVO_RESOURCE_REQUEST_SUBRESOURCE: u8 = 3;
+
+/// One request header, in [`ServoResourceRequest::headers`].
+///
+/// Both strings are borrowed for the duration of the callback only and are not
+/// NUL-terminated. `name` is lower-case ASCII. `value` is the header's bytes, which
+/// HTTP does not require to be UTF-8.
+#[repr(C)]
+pub struct ServoHttpHeader {
+    pub name_ptr: *const u8,
+    pub name_len: usize,
+    pub value_ptr: *const u8,
+    pub value_len: usize,
+}
+
+const _: () = assert!(
+    size_of::<ServoHttpHeader>() == 32,
+    "ServoHttpHeader must stay 32 bytes wide"
+);
+
+/// A resource request offered to a [`ServoResourceRequestCallback`], passed by pointer.
+///
+/// Every pointer in it, and the struct itself, is borrowed for the duration of the
+/// callback only. The strings are not NUL-terminated; copy what you need to keep.
+#[repr(C)]
+pub struct ServoResourceRequest {
+    /// The URL being requested, serialized. For a redirect, the URL redirected to.
+    pub url_ptr: *const u8,
+    pub url_len: usize,
+    /// The HTTP method, e.g. `GET` or `POST`.
+    pub method_ptr: *const u8,
+    pub method_len: usize,
+    /// The request's headers as they stand when the request is offered, `headers_len`
+    /// of them; `NULL` when there are none. These are the headers the page or the
+    /// engine's caller set (for `fetch()`, the script's own). Headers the network layer
+    /// adds later, on the way out (`User-Agent`, `Accept-Encoding`, `Cookie`, `Origin`,
+    /// `Referer`, `Host` and the like), are not in it yet.
+    pub headers: *const ServoHttpHeader,
+    pub headers_len: usize,
+    /// The Fetch standard's request destination: `document`, `iframe`, `frame`,
+    /// `image`, `script`, `style`, `font`, and so on, or empty for `fetch()` and
+    /// `XMLHttpRequest`. Finer-grained than `kind`; `kind` is what to gate on.
+    pub destination_ptr: *const u8,
+    pub destination_len: usize,
+    /// One of the `SERVO_RESOURCE_REQUEST_*` constants.
+    pub kind: u8,
+    /// Whether this request follows a redirect. Each hop of a redirect chain is
+    /// offered on its own, with the URL it is redirected to.
+    pub is_redirect: bool,
+}
+
+const _: () = assert!(
+    size_of::<ServoResourceRequest>() == 72,
+    "ServoResourceRequest must stay 72 bytes wide"
+);
+
+/// Called for every resource request a `WebView` makes, before the request leaves the
+/// engine, so the embedder can allow or refuse it. Return `true` to allow the request,
+/// `false` to refuse it. A refused request fails as a network error, exactly as if the
+/// connection had failed: a refused navigation does not load, a refused image fires
+/// `error`, a refused `fetch()` rejects with a `TypeError`.
+///
+/// This fires for the top-level document, for every nested frame's document, and for
+/// every subresource, whatever the URL's scheme (`http`, `https`, `data`, `blob`,
+/// `file` and registered custom schemes alike), and again for each redirect hop. It
+/// runs on the thread that calls `servo_spin_event_loop`. The request waits for the
+/// answer, so the callback should answer promptly; it cannot defer the answer.
+///
+/// Only requests the engine attributes to this `WebView` are offered: its documents',
+/// and those of its dedicated and shared workers. A request made on behalf of no
+/// `WebView`, which includes every request a service worker makes, is not offered and
+/// proceeds as today.
+///
+/// Navigations are also offered to `request_navigation` on the delegate, before this.
+/// That one is the place to refuse a navigation by its URL; this one sees every
+/// request, the navigation's own fetch included.
+///
+/// `webview` is a temporary handle with the same rules as the delegate's callbacks.
+/// `request` and everything it points to are borrowed for the call only.
+///
+/// A callback that unwinds is treated as a refusal, for the same reason as
+/// `request_navigation`'s: a vetting hook must not turn into a bypass because the
+/// embedder panicked.
+///
+/// The alias is itself the nullable pointer, rather than an `Option` of a plain function
+/// type at each use, so that the generated header declares it as one C function-pointer
+/// typedef: cbindgen does not see through an `Option` of an alias.
+pub type ServoResourceRequestCallback = Option<
+    unsafe extern "C" fn(
+        webview: *mut WebView,
+        request: *const ServoResourceRequest,
+        user_data: *mut c_void,
+    ) -> bool,
+>;
+
+/// A set [`ServoResourceRequestCallback`] and the `user_data` it is called with.
+#[derive(Clone, Copy)]
+pub(crate) struct ResourceRequestHook {
+    pub(crate) callback: unsafe extern "C" fn(
+        webview: *mut WebView,
+        request: *const ServoResourceRequest,
+        user_data: *mut c_void,
+    ) -> bool,
+    pub(crate) user_data: *mut c_void,
+}
+
+thread_local! {
+    /// The resource request callback of each `WebView` whose delegate is a
+    /// `ServoWebViewDelegate`, keyed by `WebView`. Only those can receive one: the
+    /// hook is read from `ServoWebViewDelegate::load_web_resource`, and a `WebView`'s
+    /// delegate is fixed when it is built. An entry of `None` is such a `WebView`
+    /// with no callback set, which keeps Servo's default and lets every request
+    /// through. A `WebView` with no entry has some other delegate.
+    static RESOURCE_REQUEST_HOOKS: RefCell<HashMap<WebViewId, Option<ResourceRequestHook>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Records that `webview_id` was built with a `ServoWebViewDelegate`, so that a
+/// resource request callback can be set on it, and sets `hook` as its callback.
+pub(crate) fn register_capi_webview(webview_id: WebViewId, hook: Option<ResourceRequestHook>) {
+    RESOURCE_REQUEST_HOOKS.with_borrow_mut(|hooks| {
+        hooks.insert(webview_id, hook);
+    });
+}
+
+/// Sets or clears `webview_id`'s resource request callback. Returns `false`, changing
+/// nothing, if the `WebView` was not built with a `ServoWebViewDelegate`.
+pub(crate) fn set_resource_request_hook(
+    webview_id: WebViewId,
+    hook: Option<ResourceRequestHook>,
+) -> bool {
+    RESOURCE_REQUEST_HOOKS.with_borrow_mut(|hooks| match hooks.get_mut(&webview_id) {
+        Some(slot) => {
+            *slot = hook;
+            true
+        },
+        None => false,
+    })
+}
+
+/// Forgets everything recorded for `webview_id`.
+pub(crate) fn forget_webview(webview_id: WebViewId) {
+    RESOURCE_REQUEST_HOOKS.with_borrow_mut(|hooks| {
+        hooks.remove(&webview_id);
+    });
+}
+
+fn resource_request_hook(webview_id: WebViewId) -> Option<ResourceRequestHook> {
+    RESOURCE_REQUEST_HOOKS.with_borrow(|hooks| hooks.get(&webview_id).copied().flatten())
+}
+
 thread_local! {
     /// The content process of each `WebView`'s active top-level document, keyed by
     /// `WebView`. Written by `notify_frame_changed` and read by
@@ -518,6 +686,10 @@ impl WebViewDelegate for ServoWebViewDelegate {
     }
 
     fn notify_closed(&self, mut webview: WebView) {
+        // No further requests come for a closed `WebView`, whether or not the embedder
+        // listens for the close.
+        forget_webview(webview.id());
+
         let Some(callback) = self.notify_closed else {
             return;
         };
@@ -615,6 +787,81 @@ impl WebViewDelegate for ServoWebViewDelegate {
             // to the permissive default: this hook exists so that navigations can be
             // vetted, and a panicking callback must not become a silent bypass.
             Err(..) => navigation_request.deny(),
+        }
+    }
+
+    fn load_web_resource(&self, mut webview: WebView, load: WebResourceLoad) {
+        let Some(hook) = resource_request_hook(webview.id()) else {
+            // Keep Servo's default path. Dropping the load without answering lets the
+            // request proceed untouched, which is what an unhandled load does upstream.
+            return;
+        };
+
+        let request = load.request();
+        let url = request.url.as_str();
+        let method = request.method.as_str();
+        let destination = request.destination.as_str();
+        let headers: Vec<ServoHttpHeader> = request
+            .headers
+            .iter()
+            .map(|(name, value)| ServoHttpHeader {
+                name_ptr: name.as_str().as_ptr(),
+                name_len: name.as_str().len(),
+                value_ptr: value.as_bytes().as_ptr(),
+                value_len: value.as_bytes().len(),
+            })
+            .collect();
+        let kind = if request.is_for_main_frame {
+            SERVO_RESOURCE_REQUEST_TOP_LEVEL_NAVIGATION
+        } else if matches!(destination, "document" | "iframe" | "frame") {
+            SERVO_RESOURCE_REQUEST_FRAME_NAVIGATION
+        } else {
+            SERVO_RESOURCE_REQUEST_SUBRESOURCE
+        };
+
+        let c_request = ServoResourceRequest {
+            url_ptr: url.as_ptr(),
+            url_len: url.len(),
+            method_ptr: method.as_ptr(),
+            method_len: method.len(),
+            headers: if headers.is_empty() {
+                std::ptr::null()
+            } else {
+                headers.as_ptr()
+            },
+            headers_len: headers.len(),
+            destination_ptr: destination.as_ptr(),
+            destination_len: destination.len(),
+            kind,
+            is_redirect: request.is_redirect,
+        };
+
+        // SAFETY: The embedder is assumed to uphold the safety requirements documented
+        // on `ServoResourceRequestCallback` and its setters.
+        //
+        // The `webview` raw pointer is derived from a valid `webview` handle, and
+        // `c_request` borrows `load` and `headers`, both of which outlive the call.
+        //
+        // The callback is contracted not to unwind, but it is contained here anyway
+        // so that a panicking embedder cannot unwind into Servo's event loop.
+        let allowed = panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+            (hook.callback)(
+                &mut webview as *mut WebView,
+                &c_request as *const ServoResourceRequest,
+                hook.user_data,
+            )
+        }));
+
+        match allowed {
+            // Dropping the load lets the request proceed untouched.
+            Ok(true) => {},
+            // Refused, or the embedder was asked and did not answer: fail the load as
+            // a network error. A panicking callback must not become a silent bypass,
+            // as for `request_navigation`.
+            Ok(false) | Err(..) => {
+                let url = load.request().url.clone().into_url();
+                load.intercept(WebResourceResponse::new(url)).cancel();
+            },
         }
     }
 
@@ -1233,6 +1480,7 @@ pub unsafe extern "C" fn servo_webview_accept_new(
     // SAFETY: As documented above, `delegate` is either null or a valid
     // `ServoWebViewDelegate`. It is `Copy`, so this snapshots it rather than aliasing
     // the embedder's storage.
+    let has_capi_delegate = !delegate.is_null();
     if let Some(delegate) = unsafe { delegate.as_ref() } {
         builder = builder.delegate(std::rc::Rc::new(*delegate));
     }
@@ -1241,7 +1489,15 @@ pub unsafe extern "C" fn servo_webview_accept_new(
     // manager, so that `servo_webview_add_script` works on it afterwards.
     builder = builder.user_content_manager(std::rc::Rc::new(UserContentManager::new(&servo)));
 
-    Box::into_raw(Box::new(builder.build()))
+    let webview = builder.build();
+    // A `WebView` accepted with a delegate can take a resource request callback through
+    // `servo_webview_set_resource_request_callback`. None is set yet. A request made
+    // before one is set proceeds as today. None can be made before this returns: the
+    // engine answers requests only while the embedder spins its event loop.
+    if has_capi_delegate {
+        register_capi_webview(webview.id(), None);
+    }
+    Box::into_raw(Box::new(webview))
 }
 
 /// Generic embedder control extension, no domain logic.

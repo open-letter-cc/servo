@@ -31,6 +31,7 @@ files = [
     "./tests/capi/c/test_page_request.c",
     "./tests/capi/c/test_permission.c",
     "./tests/capi/c/test_read_frame.c",
+    "./tests/capi/c/test_resource_request.c",
     "./tests/capi/tests/c_clipboard_tests.rs",
     "./tests/capi/tests/c_control_origin_tests.rs",
     "./tests/capi/tests/c_frame_events_tests.rs",
@@ -38,6 +39,7 @@ files = [
     "./tests/capi/tests/c_page_request_tests.rs",
     "./tests/capi/tests/c_permission_tests.rs",
     "./tests/capi/tests/c_read_frame_tests.rs",
+    "./tests/capi/tests/c_resource_request_tests.rs",
     "./tests/capi/tests/multiprocess_containment.rs",
     # The embedder page-request namespace has no specification: it is this
     # fork's own, exposed behind a preference, and documented in the file.

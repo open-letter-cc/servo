@@ -375,8 +375,8 @@ mod tests {
     use super::ServoEventLoopWaker;
     use crate::rendering_context::ServoFrameInfo;
     use crate::webview_delegate::{
-        ServoEmbedderControl, ServoEmbedderController, ServoPermissionRequest,
-        ServoWebViewDelegate,
+        ServoEmbedderControl, ServoEmbedderController, ServoHttpHeader, ServoPermissionRequest,
+        ServoResourceRequest, ServoWebViewDelegate,
     };
 
     /// Generic embedder control extension, no domain logic.
@@ -400,6 +400,8 @@ mod tests {
         assert_eq!(size_of::<ServoEmbedderControl>(), 56);
         assert_eq!(size_of::<ServoPermissionRequest>(), 64);
         assert_eq!(size_of::<ServoFrameInfo>(), 32);
+        assert_eq!(size_of::<ServoHttpHeader>(), 32);
+        assert_eq!(size_of::<ServoResourceRequest>(), 72);
     }
 
     /// The feature mask must say what this build actually is, in both arms: an

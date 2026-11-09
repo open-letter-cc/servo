@@ -11,7 +11,10 @@ use euclid::Scale;
 use servo_api::{Servo, UserContentManager, UserScript, WebView, WebViewBuilder};
 
 use crate::rendering_context::RenderingContext;
-use crate::webview_delegate::ServoWebViewDelegate;
+use crate::webview_delegate::{
+    ResourceRequestHook, ServoResourceRequestCallback, ServoWebViewDelegate, forget_webview,
+    register_capi_webview, set_resource_request_hook,
+};
 
 /// An opaque struct representing a builder object for constructing new
 /// `WebView`s.
@@ -29,6 +32,8 @@ pub struct ServoWebViewBuilder {
     rendering_context: Rc<dyn servo_api::RenderingContext>,
     url: Option<url::Url>,
     delegate: Option<ServoWebViewDelegate>,
+    /// Set by `servo_webview_builder_set_resource_request_callback`.
+    resource_request: Option<ResourceRequestHook>,
     /// User scripts to install, in the order they were added. A `WebView` only has a
     /// `UserContentManager` if at least one script is added before it is built, which
     /// is also what makes `servo_webview_add_script` work on it afterwards.
@@ -84,6 +89,7 @@ pub unsafe extern "C" fn servo_webview_builder_create(
         rendering_context: boxed_c_context.inner,
         url: None,
         delegate: None,
+        resource_request: None,
         user_scripts: Vec::new(),
     }))
 }
@@ -165,6 +171,89 @@ pub unsafe extern "C" fn servo_webview_builder_set_delegate(
     builder.delegate = Some(delegate);
 }
 
+/// Sets the callback that vets every resource request the `WebView` makes. See
+/// [`ServoResourceRequestCallback`] for when it is called and what its answer does.
+///
+/// `callback` may be `NULL`, which leaves the `WebView` without one: every request
+/// proceeds as it does today. `user_data` is passed to every call of `callback` and is
+/// independent of the delegate's `user_data`. It may be `NULL`.
+///
+/// A callback set here is in place before the `WebView`'s first request, its initial
+/// URL's navigation included. It works whether or not a delegate is set on the builder.
+/// Change or clear it afterwards with [`servo_webview_set_resource_request_callback`].
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `builder` is a non-null pointer to a `ServoWebViewBuilder` previously returned by
+///   `servo_webview_builder_create` and not yet freed or built.
+/// - `callback`, if non-null, is a valid C ABI function matching the signature of
+///   [`ServoResourceRequestCallback`] and does not unwind across the FFI boundary.
+/// - `callback` and `user_data` remain valid for as long as the `WebView` built from
+///   `builder` exists, or until another callback is set on it.
+/// - The call is made from the thread that created `builder`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_builder_set_resource_request_callback(
+    builder: *mut ServoWebViewBuilder,
+    callback: ServoResourceRequestCallback,
+    user_data: *mut c_void,
+) {
+    assert!(!builder.is_null(), "builder pointer must not be null");
+    // SAFETY: The caller is assumed to uphold the safety requirements for `builder`
+    // documented above.
+    let builder = unsafe { &mut *builder };
+    builder.resource_request = callback.map(|callback| ResourceRequestHook {
+        callback,
+        user_data,
+    });
+}
+
+/// Sets, replaces or clears (`callback` `NULL`) the resource request callback of a live
+/// `WebView`. See [`ServoResourceRequestCallback`] for when it is called and what its
+/// answer does. The change applies to requests offered after this returns.
+///
+/// Returns `true` if the change was made. Returns `false`, changing nothing, if
+/// `webview` is null, or if the `WebView` has no delegate of this API's own: built by
+/// `servo_webview_accept_new` with a `NULL` delegate, or by
+/// `servo_webview_builder_build` with neither a delegate nor a resource request
+/// callback. A `WebView` built any other way accepts one. To vet the requests of a
+/// `WebView` that `servo_webview_accept_new` creates, pass a delegate to it and call
+/// this before the next `servo_spin_event_loop`, which is before the new `WebView`
+/// makes any request.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `webview` is null or a valid pointer returned by `servo_webview_builder_build` or
+///   `servo_webview_accept_new` and not yet freed with `servo_webview_free`.
+/// - `callback`, if non-null, is a valid C ABI function matching the signature of
+///   [`ServoResourceRequestCallback`] and does not unwind across the FFI boundary.
+/// - `callback` and `user_data` remain valid for as long as the `WebView` exists, or
+///   until another callback is set on it.
+/// - The call is made from the thread that created the `Servo` instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_set_resource_request_callback(
+    webview: *const WebView,
+    callback: ServoResourceRequestCallback,
+    user_data: *mut c_void,
+) -> bool {
+    if webview.is_null() {
+        return false;
+    }
+    // SAFETY: The caller is assumed to uphold the safety requirements for `webview`
+    // documented above.
+    let webview = unsafe { &*webview };
+    set_resource_request_hook(
+        webview.id(),
+        callback.map(|callback| ResourceRequestHook {
+            callback,
+            user_data,
+        }),
+    )
+}
+
 /// Consumes `builder` and creates a new `WebView` instance.
 ///
 /// `builder` is a handle to a `ServoWebViewBuilder` object.
@@ -199,6 +288,16 @@ pub unsafe extern "C" fn servo_webview_builder_build(
         webview_builder = webview_builder.url(url);
     }
 
+    // A resource request callback is read from the `WebView`'s `ServoWebViewDelegate`,
+    // so a builder given a callback and no delegate gets an empty one: every callback
+    // `NULL`, which keeps Servo's default for each. A builder given neither keeps
+    // Servo's own default delegate, exactly as before.
+    let capi_delegate = match (builder.delegate, builder.resource_request) {
+        (Some(delegate), _) => Some(delegate),
+        (None, Some(_)) => Some(ServoWebViewDelegate::empty()),
+        (None, None) => None,
+    };
+
     if let Some(delegate) = builder.delegate {
         // Installed whenever a `ServoWebViewDelegate` is set at all, so the clipboard
         // gate cannot be bypassed by a `WebView` that configured a delegate for other
@@ -207,6 +306,8 @@ pub unsafe extern "C" fn servo_webview_builder_build(
         webview_builder = webview_builder.clipboard_delegate(std::rc::Rc::new(
             crate::clipboard::CapiClipboardDelegate(delegate),
         ));
+    }
+    if let Some(delegate) = capi_delegate {
         webview_builder = webview_builder.delegate(std::rc::Rc::new(delegate));
     }
 
@@ -221,7 +322,11 @@ pub unsafe extern "C" fn servo_webview_builder_build(
     }
     webview_builder = webview_builder.user_content_manager(user_content_manager);
 
-    Box::into_raw(Box::new(webview_builder.build()))
+    let webview = webview_builder.build();
+    if capi_delegate.is_some() {
+        register_capi_webview(webview.id(), builder.resource_request);
+    }
+    Box::into_raw(Box::new(webview))
 }
 
 /// Destroys `builder` and frees its memory.
@@ -547,9 +652,8 @@ pub unsafe extern "C" fn servo_webview_free(webview: *mut WebView) {
 
     // SAFETY: The caller is assumed to uphold the safety requirements
     // for `webview` documented above.
-    unsafe {
-        let _ = Box::from_raw(webview);
-    }
+    let webview = unsafe { Box::from_raw(webview) };
+    forget_webview(webview.id());
 }
 
 /// Returns the operating-system process id of the content process running this

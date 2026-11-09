@@ -54,3 +54,8 @@ servo_rendering_context_shared_remove_consumer
 servo_webview_respond_permission
 # Names the content process serving a webview's top-level document.
 servo_webview_content_process_id
+# Sets, replaces or clears the callback that vets each resource request a webview
+# makes: on the builder, so it covers the first navigation, and on a live webview,
+# for one created through servo_webview_accept_new. The two are classified together.
+servo_webview_builder_set_resource_request_callback
+servo_webview_set_resource_request_callback
