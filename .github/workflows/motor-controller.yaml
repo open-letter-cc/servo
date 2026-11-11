@@ -84,6 +84,14 @@ on:
           by default; off for a dispatch that only wants the Windows job.
         type: boolean
         default: true
+      release-tag:
+        description: >-
+          Publish the Windows payload from this run as a GitHub Release with this
+          tag (for example `capi-win-0.1.0`), created on the dispatched commit.
+          Empty by default: no release. Meant for a Windows-only dispatch
+          (`ladder` off); the full release still comes from a `capi-*` tag push.
+        type: string
+        default: ""
       start-at:
         description: >-
           The rung the ladder starts at. Only for picking up a tree whose rungs
@@ -940,3 +948,60 @@ jobs:
             echo '```'
           } > notes.md
           gh release create "${{ github.ref_name }}" release/*.zip release/SHA256SUMS --title "${{ github.ref_name }}" --notes-file notes.md --verify-tag
+
+  # ---------------------------------------------------------------------------
+  # Windows-only release, by dispatch with `release-tag` set. The full release
+  # above needs every rung green; this one publishes just the signed Windows
+  # payload for when the other platforms are not being shipped yet. It needs
+  # only `build`, whose success already means the three DLLs were signed and
+  # verified Valid, the export gate passed and the hang-containment test passed.
+  release-windows:
+    name: GitHub Release from the Windows payload (dispatch)
+    needs: [build]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'workflow_dispatch'
+          && inputs.release-tag != '' && inputs.windows
+          && needs.build.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Package the Windows payload
+        run: |
+          set -e
+          mkdir -p release
+          for dir in artifacts/libservo-windows-dll-*; do
+            name=$(basename "$dir")
+            (cd "$dir" && zip -qr "../../release/$name.zip" .)
+          done
+          (cd release && sha256sum *.zip > SHA256SUMS && cat SHA256SUMS)
+      - name: Attest the release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/*.zip
+            release/SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          {
+            echo "Windows payload only, built from \`${{ github.sha }}\` by run ${{ github.run_id }}."
+            echo "servo.dll, libEGL.dll and libGLESv2.dll are Authenticode-signed."
+            echo "Other platforms are not part of this release."
+            echo
+            echo "The zip holds the three DLLs, \`resources/\`, \`NOTICE.md\` and \`LICENSES/\`."
+            echo "The library is a Larger Work: Servo under MPL-2.0 together with this"
+            echo "fork's own additions under LicenseRef-OpenLetter-Tools, as NOTICE.md states."
+            echo
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" release/*.zip release/SHA256SUMS --title "$TAG" --notes-file notes.md --target "${{ github.sha }}"
