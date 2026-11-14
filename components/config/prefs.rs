@@ -371,6 +371,10 @@ pub struct Preferences {
     pub network_enforce_tls_localhost: bool,
     pub network_enforce_tls_onion: bool,
     pub network_http_cache_disabled: bool,
+    /// Whether the cookie jar, HSTS list and authentication cache are written to the
+    /// config directory when the engine exits. An embedder that keeps one store for
+    /// several engines turns this off and moves the state itself.
+    pub network_site_state_write_on_exit: bool,
     /// The path to a disk cache file. Empty string disables the disk cache.
     pub network_http_disk_cache: String,
     /// Maximum size of the disk cache file in bytes.
@@ -602,6 +606,7 @@ impl Preferences {
             network_enforce_tls_localhost: false,
             network_enforce_tls_onion: false,
             network_http_cache_disabled: false,
+            network_site_state_write_on_exit: true,
             network_http_disk_cache: String::new(),
             network_http_disk_cache_size: 1024 * 1024 * 100, // Roughtly 100MB
             network_http_proxy_uri: String::new(),

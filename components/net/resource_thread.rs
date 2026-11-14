@@ -25,8 +25,8 @@ use net_traits::response::{Response, ResponseInit};
 use net_traits::{
     AsyncRuntime, CookieAsyncResponse, CookieData, CookieSource, CoreResourceMsg,
     CoreResourceThread, CustomResponseMediator, DiscardFetch, FetchChannels, FetchTaskTarget,
-    NetworkError, ResourceFetchTiming, ResourceThreads, ResourceTimingType, WebSocketDomAction,
-    WebSocketNetworkEvent,
+    NetworkError, ResourceFetchTiming, ResourceThreads, ResourceTimingType, SiteStateImportMode,
+    SiteStateKind, WebSocketDomAction, WebSocketNetworkEvent,
 };
 use parking_lot::{Mutex, RwLock};
 use profile_traits::generic_callback::GenericCallback as ProfileGenericCallback;
@@ -656,8 +656,24 @@ impl ResourceChannelManager {
                     .unwrap_or_default();
                 sender.send_or_ignore(total);
             },
+            CoreResourceMsg::ExportSiteState(kind, sender) => {
+                let serialized = match kind {
+                    SiteStateKind::Cookies => serde_json::to_vec(&*http_state.cookie_jar.read()),
+                    SiteStateKind::Hsts => serde_json::to_vec(&*http_state.hsts_list.read()),
+                    SiteStateKind::AuthCache => serde_json::to_vec(&*http_state.auth_cache.read()),
+                };
+                sender.send_or_ignore(serialized.unwrap_or_default());
+            },
+            CoreResourceMsg::ImportSiteState(kind, data, mode, sender) => {
+                sender.send_or_ignore(import_site_state(http_state, kind, &data, mode));
+            },
             CoreResourceMsg::Exit(sender) => {
-                if let Some(ref config_dir) = self.config_dir {
+                // An embedder that keeps one store for several engines, through
+                // `ExportSiteState` and `ImportSiteState`, turns this off: each engine
+                // writing the whole store at exit would overwrite the others' changes.
+                if let Some(ref config_dir) = self.config_dir &&
+                    servo_config::pref!(network_site_state_write_on_exit)
+                {
                     let auth_cache = http_state.auth_cache.read();
                     servo_base::write_json_to_file(&*auth_cache, config_dir, "auth_cache.json");
                     let jar = http_state.cookie_jar.read();
@@ -677,6 +693,44 @@ impl ResourceChannelManager {
         }
         true
     }
+}
+
+/// Combine `data`, serialized by `CoreResourceMsg::ExportSiteState`, with the site state
+/// of `http_state`.
+fn import_site_state(
+    http_state: &HttpState,
+    kind: SiteStateKind,
+    data: &[u8],
+    mode: SiteStateImportMode,
+) -> Result<(), String> {
+    let error = |error: serde_json::Error| format!("Could not parse {kind:?}: {error}");
+    match kind {
+        SiteStateKind::Cookies => {
+            let imported: CookieStorage = serde_json::from_slice(data).map_err(error)?;
+            let mut jar = http_state.cookie_jar.write();
+            match mode {
+                SiteStateImportMode::Merge => jar.merge(imported),
+                SiteStateImportMode::Replace => *jar = imported,
+            }
+        },
+        SiteStateKind::Hsts => {
+            let imported: HstsList = serde_json::from_slice(data).map_err(error)?;
+            let mut list = http_state.hsts_list.write();
+            match mode {
+                SiteStateImportMode::Merge => list.merge(imported),
+                SiteStateImportMode::Replace => *list = imported,
+            }
+        },
+        SiteStateKind::AuthCache => {
+            let imported: AuthCache = serde_json::from_slice(data).map_err(error)?;
+            let mut cache = http_state.auth_cache.write();
+            match mode {
+                SiteStateImportMode::Merge => cache.entries.extend(imported.entries),
+                SiteStateImportMode::Replace => *cache = imported,
+            }
+        },
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, MallocSizeOf)]

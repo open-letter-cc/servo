@@ -412,6 +412,80 @@ int test_webview_hidpi_scale_factor(void)
     return 0;
 }
 
+typedef struct {
+    int calls;
+    size_t len;
+    char data[65536];
+} exported_t;
+
+static void on_site_state_exported(const uint8_t* data_ptr, uintptr_t data_len, void* user_data)
+{
+    exported_t* exported = (exported_t*)user_data;
+    exported->calls++;
+    exported->len = data_len < sizeof(exported->data) ? data_len : sizeof(exported->data);
+    memcpy(exported->data, data_ptr, exported->len);
+}
+
+/* Each kind of site state exports as JSON and imports again, merged or replacing; data
+ * that does not parse, and an unknown kind or mode, are refused. */
+int test_site_state_export_import(void)
+{
+    struct Servo* servo = create_test_servo();
+    if (servo == NULL)
+        return 1;
+
+    const int32_t kinds[] = { SERVO_SITE_STATE_COOKIES, SERVO_SITE_STATE_HSTS,
+        SERVO_SITE_STATE_AUTH_CACHE };
+    static exported_t exported;
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        memset(&exported, 0, sizeof(exported));
+        if (servo_site_state_export(servo, kinds[i], on_site_state_exported, &exported) != 0
+            || exported.calls != 1 || exported.len == 0 || exported.data[0] != '{') {
+            printf("    kind %d did not export JSON (calls %d, %zu bytes)\n", kinds[i],
+                exported.calls, exported.len);
+            return 1;
+        }
+        if (servo_site_state_import(servo, kinds[i], SERVO_SITE_STATE_MERGE,
+                (const uint8_t*)exported.data, exported.len)
+                != 0
+            || servo_site_state_import(servo, kinds[i], SERVO_SITE_STATE_REPLACE,
+                   (const uint8_t*)exported.data, exported.len)
+                != 0) {
+            printf("    kind %d did not import its own export\n", kinds[i]);
+            return 1;
+        }
+    }
+
+    const char* garbage = "not json";
+    if (servo_site_state_import(servo, SERVO_SITE_STATE_COOKIES, SERVO_SITE_STATE_MERGE,
+            (const uint8_t*)garbage, strlen(garbage))
+        != -2) {
+        printf("    unparsable data was not refused with -2\n");
+        return 1;
+    }
+    if (servo_site_state_import(servo, SERVO_SITE_STATE_COOKIES, SERVO_SITE_STATE_MERGE, NULL, 0)
+        != -2) {
+        printf("    empty data was not refused with -2\n");
+        return 1;
+    }
+    memset(&exported, 0, sizeof(exported));
+    if (servo_site_state_export(servo, 99, on_site_state_exported, &exported) != -1
+        || exported.calls != 0) {
+        printf("    an unknown kind was not refused with -1, without a callback\n");
+        return 1;
+    }
+    if (servo_site_state_export(servo, SERVO_SITE_STATE_COOKIES, NULL, NULL) != -1) {
+        printf("    a null callback was not refused with -1\n");
+        return 1;
+    }
+    if (servo_site_state_import(servo, 99, SERVO_SITE_STATE_MERGE, NULL, 0) != -1
+        || servo_site_state_import(servo, SERVO_SITE_STATE_COOKIES, 99, NULL, 0) != -1) {
+        printf("    an unknown kind or mode was not refused with -1\n");
+        return 1;
+    }
+    return 0;
+}
+
 int run_c_api_tests(void)
 {
     tests_run = 0;
@@ -437,6 +511,7 @@ int run_c_api_tests(void)
     RUN_TEST(test_webview_builder_set_url_invalid);
     RUN_TEST(test_webview_builder_build);
     RUN_TEST(test_webview_hidpi_scale_factor);
+    RUN_TEST(test_site_state_export_import);
 
     free_test_servo();
 
