@@ -114,7 +114,7 @@ use crate::dom::StatelessWorkletThreadPool;
 use crate::dom::bindings::callback::RootedCallback;
 use crate::dom::bindings::codegen::Bindings::AnimationFrameProviderBinding::FrameRequestCallback;
 use crate::dom::bindings::codegen::Bindings::DocumentBinding::{
-    DocumentMethods, DocumentReadyState, NamedPropertyValue,
+    DocumentMethods, DocumentReadyState, DocumentVisibilityState, NamedPropertyValue,
 };
 use crate::dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElementMethods;
 use crate::dom::bindings::codegen::Bindings::HistoryBinding::History_Binding::HistoryMethods;
@@ -535,6 +535,17 @@ impl Window {
 
     pub(crate) fn webview_state(&self) -> Rc<WebViewState> {
         self.webview_state.clone()
+    }
+
+    /// The visibility state that this [`Window`]'s documents should have given whether
+    /// the embedder has hidden its `WebView`.
+    /// <https://html.spec.whatwg.org/multipage/#system-visibility-state>
+    pub(crate) fn system_visibility_state(&self) -> DocumentVisibilityState {
+        if self.webview_state.hidden.get() {
+            DocumentVisibilityState::Hidden
+        } else {
+            DocumentVisibilityState::Visible
+        }
     }
 
     pub(crate) fn as_global_scope(&self) -> &GlobalScope {

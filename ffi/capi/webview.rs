@@ -475,6 +475,74 @@ pub unsafe extern "C" fn servo_webview_resize(webview: *mut WebView, width: u32,
     webview.resize(dpi::PhysicalSize::new(width, height));
 }
 
+/// Shows the `WebView` within its rendering context, undoing
+/// `servo_webview_hide`. Showing a `WebView` that is already shown does
+/// nothing.
+///
+/// Its documents, nested documents included, become visible again: each
+/// one's `document.visibilityState` becomes `"visible"` and it receives a
+/// `visibilitychange` event. Its timers run at their normal rate again.
+///
+/// `WebView`s are shown when they are built.
+///
+/// `webview` is a handle to a `WebView` object.
+/// The ownership of `webview` remains with the caller after the call.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `webview` is a non-null pointer to a `WebView` previously returned
+///   by `servo_webview_builder_build` and not yet passed to
+///   `servo_webview_free`. No other code may read or write `*webview`
+///   for the duration of this call.
+/// - The call is made from the same thread that originally created the
+///   `WebView` via `servo_webview_builder_build`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_show(webview: *mut WebView) {
+    assert!(!webview.is_null(), "webview pointer must not be null");
+
+    // SAFETY: The caller is assumed to uphold the safety requirements
+    // for `webview` documented above.
+    let webview = unsafe { &*webview };
+
+    webview.show();
+}
+
+/// Hides the `WebView` within its rendering context, keeping all of its
+/// state. Hiding a `WebView` that is already hidden does nothing.
+///
+/// While hidden, the `WebView` is not painted, and it behaves as a page in a
+/// tab that is not in view: its documents, nested documents included, have a
+/// `document.visibilityState` of `"hidden"` (each receives a
+/// `visibilitychange` event when it is hidden), and their timers run at a
+/// heavily limited rate. Documents created while the `WebView` is hidden
+/// start hidden. `servo_webview_show` reverses all of this.
+///
+/// `webview` is a handle to a `WebView` object.
+/// The ownership of `webview` remains with the caller after the call.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `webview` is a non-null pointer to a `WebView` previously returned
+///   by `servo_webview_builder_build` and not yet passed to
+///   `servo_webview_free`. No other code may read or write `*webview`
+///   for the duration of this call.
+/// - The call is made from the same thread that originally created the
+///   `WebView` via `servo_webview_builder_build`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_webview_hide(webview: *mut WebView) {
+    assert!(!webview.is_null(), "webview pointer must not be null");
+
+    // SAFETY: The caller is assumed to uphold the safety requirements
+    // for `webview` documented above.
+    let webview = unsafe { &*webview };
+
+    webview.hide();
+}
+
 /// Loads the given URL into the `WebView`.
 ///
 /// `webview` is a handle to a `WebView` object.

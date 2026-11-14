@@ -2740,7 +2740,8 @@ impl ScriptThread {
         })
     }
 
-    /// Handle changes to the theme, triggering reflow if the theme actually changed.
+    /// Handle changes to the theme, system focus and visibility of a `WebView`, updating
+    /// its documents if any of them actually changed.
     fn handle_update_webview_state(&self, cx: &mut JSContext, new_state: WebViewState) {
         let Some(webview_state) = self
             .webview_states
@@ -2756,8 +2757,10 @@ impl ScriptThread {
         let new_has_system_focus = new_state.has_system_focus.get();
         let system_focus_changed =
             webview_state.has_system_focus.replace(new_has_system_focus) != new_has_system_focus;
+        let new_hidden = new_state.hidden.get();
+        let hidden_changed = webview_state.hidden.replace(new_hidden) != new_hidden;
 
-        if !theme_changed && !system_focus_changed {
+        if !theme_changed && !system_focus_changed && !hidden_changed {
             return;
         }
 
@@ -2780,6 +2783,9 @@ impl ScriptThread {
             }
             if system_focus_changed {
                 document.gained_or_lost_system_focus(cx, new_has_system_focus);
+            }
+            if hidden_changed {
+                document.system_visibility_changed();
             }
         }
     }
