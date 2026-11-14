@@ -129,6 +129,11 @@ pub(crate) struct ImageResolver {
     /// background images).
     pub pending_svg_elements_for_serialization: Mutex<Vec<UntrustedNodeAddress>>,
 
+    /// The outermost inline `SVGSVGElement`s whose subtree's computed paint values
+    /// changed while restyling, so that script can serialize them again. See
+    /// [`layout_api::SVG_PAINT_PROPERTIES`].
+    pub restyled_svg_elements: Mutex<Vec<UntrustedNodeAddress>>,
+
     /// A shared reference to script's map of DOM nodes with animated images. This is used
     /// to manage image animations in script and inform the script about newly animating
     /// nodes.
@@ -152,6 +157,7 @@ impl Drop for ImageResolver {
                     .lock()
                     .is_empty()
             );
+            assert!(self.restyled_svg_elements.lock().is_empty());
         }
     }
 }

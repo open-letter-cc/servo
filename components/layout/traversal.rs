@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use layout_api::{
     DangerousStyleElement, DangerousStyleNode, LayoutDamage, LayoutElement, LayoutNode,
+    svg_paint_values,
 };
 use script::layout_dom::ServoLayoutNode;
 use style::context::{SharedStyleContext, StyleContext};
@@ -59,6 +60,19 @@ where
             element_data.damage = RestyleDamage::reconstruct();
         }
 
+        // An inline `<svg>` is rasterized from a serialization of its subtree that has
+        // the subtree's computed paint values written into it, so a change to them must
+        // reach script, which serializes it again.
+        let old_paint_values = dangerous_style_element
+            .is_svg_element()
+            .then(|| {
+                element_data
+                    .styles
+                    .get_primary()
+                    .map(|style| svg_paint_values(style))
+            })
+            .flatten();
+
         recalc_style_at(
             self,
             context,
@@ -66,6 +80,20 @@ where
             &mut element_data,
             note_child,
         );
+
+        if let Some(old_paint_values) = old_paint_values &&
+            element_data
+                .styles
+                .get_primary()
+                .is_some_and(|style| svg_paint_values(style) != old_paint_values) &&
+            let Some(svg) = outermost_svg_element(dangerous_style_element)
+        {
+            self.context
+                .image_resolver
+                .restyled_svg_elements
+                .lock()
+                .push(svg.as_node().opaque().into());
+        }
     }
 
     #[inline]
@@ -80,6 +108,20 @@ where
     fn shared_context(&self) -> &SharedStyleContext<'_> {
         &self.context.style_context
     }
+}
+
+/// The outermost `<svg>` element among the inclusive ancestors of `element` that are in
+/// the SVG namespace: the inline `<svg>` whose serialization contains `element`.
+fn outermost_svg_element<E: TElement>(element: E) -> Option<E> {
+    let mut outermost = None;
+    let mut current = Some(element);
+    while let Some(candidate) = current.filter(|candidate| candidate.is_svg_element()) {
+        if candidate.has_local_name(&web_atoms::local_name!("svg")) {
+            outermost = Some(candidate);
+        }
+        current = candidate.traversal_parent();
+    }
+    outermost
 }
 
 #[servo_tracing::instrument(skip_all)]
