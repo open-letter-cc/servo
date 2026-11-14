@@ -5472,6 +5472,28 @@ where
                 pipeline.send_throttle_messages(hidden);
             }
         }
+
+        // Every `ScriptThread` keeps one `WebViewState` per `WebView`, shared by all of
+        // the `WebView`'s documents in that thread, so updating it reaches nested
+        // documents in other event loops too, and documents created after this point
+        // start with the new visibility state.
+        let Some(state) = self
+            .webviews
+            .get(&webview_id)
+            .map(|webview| webview.state())
+        else {
+            return;
+        };
+        for event_loop in self.event_loops() {
+            if let Err(error) =
+                event_loop.send(ScriptThreadMessage::UpdateWebViewState(state.clone()))
+            {
+                warn!(
+                    "Sending to closed event loop ({:?}): {error}",
+                    event_loop.id()
+                );
+            }
+        }
     }
 
     #[servo_tracing::instrument(skip_all)]

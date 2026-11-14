@@ -83,7 +83,7 @@ pub(crate) struct ConstellationWebView {
     theme: Theme,
 
     /// Whether or not this entire [`ConstellationWebView`] is hidden. `WebView`s that
-    /// are hidden will be throttled.
+    /// are hidden will be throttled, and their documents' visibility state is "hidden".
     hidden: bool,
 
     /// Whether or not this [`ConstellationWebView`] has system focus. This is
@@ -160,6 +160,7 @@ impl ConstellationWebView {
             id: self.webview_id,
             theme: Cell::new(self.theme),
             has_system_focus: Cell::new(self.has_system_focus),
+            hidden: Cell::new(self.hidden),
         }
     }
 
