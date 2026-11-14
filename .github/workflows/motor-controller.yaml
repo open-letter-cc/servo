@@ -63,6 +63,15 @@ on:
           on a `capi-*` tag with `release` on.
         type: string
         default: ""
+      artifacts-run-id:
+        description: >-
+          With `release` on and `release-tag` set, publish the Windows payload
+          built by this earlier run (its numeric id) instead of building it
+          again: dispatch with `windows` and `ladder` off and only the release
+          job runs. The release is created on that run's commit, and only if
+          its Windows build succeeded. Empty by default: use this run's build.
+        type: string
+        default: ""
       start-at:
         description: >-
           The rung the ladder starts at. Only for picking up a tree whose rungs
@@ -900,6 +909,8 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # The job has no checkout, so `gh` cannot find the repository from one.
+          GH_REPO: ${{ github.repository }}
         run: |
           {
             echo "Payloads built from \`${{ github.sha }}\` by run ${{ github.run_id }}."
@@ -925,17 +936,41 @@ jobs:
     needs: [build]
     if: >-
       ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release
-          && inputs.release-tag != '' && inputs.windows
-          && needs.build.result == 'success' }}
+          && inputs.release-tag != ''
+          && (inputs.artifacts-run-id != ''
+              || (inputs.windows && needs.build.result == 'success')) }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
       id-token: write
       attestations: write
+      # To read another run's artifacts and jobs.
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.artifacts-run-id || github.run_id }}
     steps:
+      - name: Check the run the payload comes from
+        id: source
+        run: |
+          set -e
+          if [ "$SOURCE_RUN" != "${{ github.run_id }}" ]; then
+            conclusion=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name | startswith("Windows libservo DLL"))][0].conclusion')
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::Run $SOURCE_RUN has no successful Windows build (got: ${conclusion:-none})."
+              exit 1
+            fi
+          fi
+          sha=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq .head_sha)
+          echo "Publishing the Windows payload of run $SOURCE_RUN, built from $sha."
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          run-id: ${{ inputs.artifacts-run-id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Package the Windows payload
         run: |
           set -e
@@ -957,7 +992,7 @@ jobs:
           TAG: ${{ inputs.release-tag }}
         run: |
           {
-            echo "Windows payload only, built from \`${{ github.sha }}\` by run ${{ github.run_id }}."
+            echo "Windows payload only, built from \`${{ steps.source.outputs.sha }}\` by run $SOURCE_RUN."
             echo "servo.dll, libEGL.dll and libGLESv2.dll are Authenticode-signed."
             echo "Other platforms are not part of this release."
             echo
@@ -969,4 +1004,4 @@ jobs:
             cat release/SHA256SUMS
             echo '```'
           } > notes.md
-          gh release create "$TAG" release/*.zip release/SHA256SUMS --title "$TAG" --notes-file notes.md --target "${{ github.sha }}"
+          gh release create "$TAG" release/*.zip release/SHA256SUMS --title "$TAG" --notes-file notes.md --target "${{ steps.source.outputs.sha }}"
