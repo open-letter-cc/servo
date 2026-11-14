@@ -407,6 +407,19 @@ pub struct Preferences {
     pub webgl_testing_context_creation_error: bool,
     /// Maximum number of workers for the main thread pool
     pub thread_pool_workers_max: u64,
+    /// The stack size of each script thread, in KiB. JavaScript running on it may use
+    /// half of it; the rest is kept for the engine's own frames (layout among them), so
+    /// that deep recursion in script throws a catchable error instead of overflowing.
+    /// Values below 1024 are raised to 1024.
+    pub thread_script_stack_size_kb: i64,
+    /// The stack size of each worker and worklet thread, in KiB, divided as for
+    /// [`Self::thread_script_stack_size_kb`]. Values below 1024 are raised to 1024.
+    pub thread_worker_stack_size_kb: i64,
+    /// The stack size of the threads that style and lay out pages in parallel, in KiB.
+    /// 0 keeps the style system's own pool and its stack size; a larger value gives
+    /// layout a pool of its own with stacks of this size, for pages nested deeply
+    /// enough to exhaust the default. Read when the pool is first used.
+    pub thread_layout_stack_size_kb: i64,
     /// Number of workers per thread pool, if we fail to detect how much
     /// parallelism is available at runtime.
     pub thread_pool_fallback_workers: u64,
@@ -616,6 +629,9 @@ impl Preferences {
             shell_background_color_rgba: [1.0, 1.0, 1.0, 1.0],
             log_filter: String::new(),
             thread_pool_workers_max: 4,
+            thread_script_stack_size_kb: 8 * 1024,
+            thread_worker_stack_size_kb: 2 * 1024,
+            thread_layout_stack_size_kb: 0,
             thread_pool_async_runtime_workers_max: 6,
             thread_pool_fallback_workers: 3,
             // <https://github.com/linebender/vello/blob/c95b228e1cf73bf96338e8c8ae0d145553f8f99c/sparse_strips/vello_cpu/examples/basic.rs#L51>

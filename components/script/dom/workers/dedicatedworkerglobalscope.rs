@@ -73,7 +73,9 @@ use crate::dom::workerglobalscope::{
 use crate::messaging::{CommonScriptMsg, ScriptEventLoopReceiver, ScriptEventLoopSender};
 use crate::realms::enter_auto_realm;
 use crate::runtime::script_runtime::ScriptThreadEventCategory::WorkerEvent;
-use crate::runtime::script_runtime::{IntroductionType, Runtime, ThreadSafeJSContext};
+use crate::runtime::script_runtime::{
+    IntroductionType, JSThreadKind, Runtime, ThreadSafeJSContext, set_js_thread_stack_size,
+};
 use crate::scripting::script_module::fetch_a_module_script_graph;
 use crate::tasks::task_queue::{QueuedTask, QueuedTaskConversion, TaskQueue};
 use crate::tasks::task_source::TaskSourceName;
@@ -452,9 +454,12 @@ impl DedicatedWorkerGlobalScope {
         let worker_name = worker_options.name.to_string();
         let credentials = worker_options.credentials.convert();
 
+        let stack_size = JSThreadKind::Worker.stack_size();
         thread::Builder::new()
             .name(format!("WW:{}", worker_url.debug_compact()))
+            .stack_size(stack_size)
             .spawn(move || {
+                set_js_thread_stack_size(stack_size);
                 thread_state::initialize(ThreadState::SCRIPT | ThreadState::IN_WORKER);
                 ScriptEventLoopId::install(event_loop_id);
 

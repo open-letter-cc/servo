@@ -412,6 +412,45 @@ int test_webview_hidpi_scale_factor(void)
     return 0;
 }
 
+/* Each named resource-limit setter sets its preference and refuses a value out of range,
+ * leaving the preference as it was. */
+int test_preferences_resource_limits(void)
+{
+    ServoPreferences* preferences = servo_preferences_create();
+    if (preferences == NULL)
+        return 1;
+
+    struct {
+        const char* name;
+        int32_t (*set)(ServoPreferences*, int64_t);
+        int64_t good;
+        int64_t bad;
+    } limits[] = {
+        { "thread_script_stack_size_kb", servo_preferences_set_script_thread_stack_size_kb, 16384,
+            512 },
+        { "thread_worker_stack_size_kb", servo_preferences_set_worker_thread_stack_size_kb, 4096,
+            0 },
+        { "thread_layout_stack_size_kb", servo_preferences_set_layout_thread_stack_size_kb, 65536,
+            -1 },
+        { "layout_threads", servo_preferences_set_layout_threads, 1, 100 },
+    };
+    int failed = 0;
+    for (size_t i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        if (limits[i].set(preferences, limits[i].good) != 0
+            || servo_preferences_get_i64(preferences, limits[i].name) != limits[i].good) {
+            printf("    %s was not set to %lld\n", limits[i].name, (long long)limits[i].good);
+            failed = 1;
+        }
+        if (limits[i].set(preferences, limits[i].bad) != -1
+            || servo_preferences_get_i64(preferences, limits[i].name) != limits[i].good) {
+            printf("    %s accepted %lld\n", limits[i].name, (long long)limits[i].bad);
+            failed = 1;
+        }
+    }
+    servo_preferences_free(preferences);
+    return failed;
+}
+
 int run_c_api_tests(void)
 {
     tests_run = 0;
@@ -430,6 +469,7 @@ int run_c_api_tests(void)
     RUN_TEST(test_preferences_string_roundtrip);
     RUN_TEST(test_preferences_f64_roundtrip);
     RUN_TEST(test_preferences_f64_array_roundtrip);
+    RUN_TEST(test_preferences_resource_limits);
     RUN_TEST(test_rendering_context_create_and_free);
     RUN_TEST(test_rendering_context_zero_size_returns_null);
     RUN_TEST(test_webview_builder_create_and_free);

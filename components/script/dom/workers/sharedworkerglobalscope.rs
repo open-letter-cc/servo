@@ -65,7 +65,9 @@ use crate::dom::workerglobalscope::{
 };
 use crate::messaging::{CommonScriptMsg, ScriptEventLoopReceiver, ScriptEventLoopSender};
 use crate::runtime::script_runtime::ScriptThreadEventCategory::WorkerEvent;
-use crate::runtime::script_runtime::{IntroductionType, Runtime};
+use crate::runtime::script_runtime::{
+    IntroductionType, JSThreadKind, Runtime, set_js_thread_stack_size,
+};
 use crate::scripting::script_module::fetch_a_module_script_graph;
 use crate::tasks::task_queue::{QueuedTask, QueuedTaskConversion, TaskQueue};
 use crate::tasks::task_source::TaskSourceName;
@@ -399,9 +401,12 @@ impl SharedWorkerGlobalScope {
         let is_nested_browsing_context = current_global.is_nested_browsing_context();
         let worker_name = worker_name.to_string();
 
+        let stack_size = JSThreadKind::Worker.stack_size();
         thread::Builder::new()
             .name(format!("SWW:{}", worker_url.debug_compact()))
+            .stack_size(stack_size)
             .spawn(move || {
+                set_js_thread_stack_size(stack_size);
                 // Step 4. Let agent be the result of obtaining a dedicated/shared worker agent
                 // given outside settings and is shared. Run the rest of these steps in that
                 // agent.

@@ -110,6 +110,40 @@ use crate::{BoxTree, FragmentTree};
 static STYLE_THREAD_POOL: Mutex<&LazyLock<style::global_style_data::StyleThreadPool>> =
     Mutex::new(&style::global_style_data::STYLE_THREAD_POOL);
 
+/// The most threads the style system's per-thread data supports in one pool.
+const MAX_LAYOUT_POOL_THREADS: usize = 6;
+
+/// A pool to style and lay out in parallel on, used in place of the style system's
+/// pool when the `thread_layout_stack_size_kb` preference asks for larger stacks than
+/// that pool's threads have. Parallel layout recurses with the depth of the page, and
+/// unlike styling it has no depth limiter, so a deeply nested page can exhaust the style
+/// threads' stacks. Built from the preferences when first used.
+static LAYOUT_THREAD_POOL: LazyLock<Option<rayon::ThreadPool>> = LazyLock::new(|| {
+    let stack_size_kb = pref!(thread_layout_stack_size_kb).max(0) as usize;
+    // Smaller stacks than the style system's would defeat its depth limiter.
+    if stack_size_kb <= style::parallel::STYLE_THREAD_STACK_SIZE_KB {
+        return None;
+    }
+    // The same number of threads as the style system's pool.
+    let threads = pref!(layout_threads);
+    let threads = if threads >= 0 {
+        threads as usize
+    } else {
+        std::thread::available_parallelism().map_or(1, |cores| (cores.get() * 3 / 4).max(1))
+    };
+    let threads = threads.min(MAX_LAYOUT_POOL_THREADS);
+    if threads <= 1 {
+        return None;
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|index| format!("Layout#{index}"))
+        .stack_size(stack_size_kb * 1024)
+        .start_handler(|_| style::thread_state::initialize_layout_worker_thread())
+        .build()
+        .ok()
+});
+
 /// A CSS file to style the user agent stylesheet.
 static USER_AGENT_CSS: &[u8] = include_bytes!("./stylesheets/user-agent.css");
 
@@ -1298,9 +1332,10 @@ impl LayoutThread {
             ua_or_user: &shared_locks.ua_or_user.read(),
         };
 
-        let rayon_pool = STYLE_THREAD_POOL.lock();
-        let rayon_pool = rayon_pool.pool();
-        let rayon_pool = rayon_pool.as_ref();
+        // The lock is held while laying out on either pool; see `STYLE_THREAD_POOL`.
+        let style_thread_pool = STYLE_THREAD_POOL.lock();
+        let style_thread_pool = style_thread_pool.pool();
+        let rayon_pool = LAYOUT_THREAD_POOL.as_ref().or(style_thread_pool.as_ref());
 
         let device_has_changed = std::mem::replace(&mut self.device_has_changed, false);
         let dangerous_root_element = unsafe { root_element.dangerous_style_element() };
