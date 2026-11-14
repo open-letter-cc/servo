@@ -74,7 +74,7 @@ use style::device::Device;
 use style::dom::OpaqueNode;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::style_structs::Font;
-use style::properties::{ComputedValues, PropertyId};
+use style::properties::{ComputedValues, LonghandId, PropertyDeclarationId, PropertyId};
 use style::selector_parser::{PseudoElement, RestyleDamage, Snapshot};
 use style::str::char_is_whitespace;
 use style::stylesheets::{DocumentStyleSheet, Stylesheet};
@@ -164,6 +164,27 @@ pub struct HTMLCanvasData {
     pub image_key: Option<ImageKey>,
     pub width: u32,
     pub height: u32,
+}
+
+/// The computed properties an inline `<svg>` subtree is painted with that can come from
+/// outside the subtree (the page's stylesheets, inheritance from the `<svg>`'s
+/// ancestors, custom properties). The subtree is rasterized from its serialization,
+/// which carries none of these, so their computed values are written into it.
+pub const SVG_PAINT_PROPERTIES: [(&str, LonghandId); 6] = [
+    ("fill", LonghandId::Fill),
+    ("stroke", LonghandId::Stroke),
+    ("color", LonghandId::Color),
+    ("opacity", LonghandId::Opacity),
+    ("fill-opacity", LonghandId::FillOpacity),
+    ("stroke-opacity", LonghandId::StrokeOpacity),
+];
+
+/// The computed values of [`SVG_PAINT_PROPERTIES`] in `style`, serialized as CSS. These
+/// are computed values, so `var()` is already substituted; `currentcolor` in `fill` or
+/// `stroke` resolves against the `color` written beside it.
+pub fn svg_paint_values(style: &ComputedValues) -> [String; 6] {
+    SVG_PAINT_PROPERTIES
+        .map(|(_, id)| style.computed_value_to_string(PropertyDeclarationId::Longhand(id)))
 }
 
 pub struct SVGElementData<'dom> {
@@ -676,6 +697,10 @@ pub struct ReflowResult {
     /// This is needed to support inline SVGs as the serialization needs to happen on
     /// the script thread.
     pub pending_svg_elements_for_serialization: Vec<UntrustedNodeAddress>,
+    /// The outermost inline `SVGSVGElement`s with a descendant (or themselves) whose
+    /// [`SVG_PAINT_PROPERTIES`] changed in this reflow's restyle, so that script can
+    /// serialize them again.
+    pub restyled_svg_elements: Vec<UntrustedNodeAddress>,
     /// The list of iframes in this layout and their sizes, used in order
     /// to communicate them with the Constellation and also the `Window`
     /// element of their content pages. Returning None if incremental reflow

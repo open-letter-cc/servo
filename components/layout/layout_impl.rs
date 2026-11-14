@@ -1125,6 +1125,7 @@ impl LayoutThread {
             pending_images: Mutex::default(),
             pending_rasterization_images: Mutex::default(),
             pending_svg_elements_for_serialization: Mutex::default(),
+            restyled_svg_elements: Mutex::default(),
             animating_images: reflow_request.animating_images.clone(),
             animation_timeline_value: reflow_request.animation_timeline_value,
         });
@@ -1178,6 +1179,10 @@ impl LayoutThread {
             std::mem::take(&mut *image_resolver.pending_rasterization_images.lock());
         let pending_svg_elements_for_serialization =
             std::mem::take(&mut *image_resolver.pending_svg_elements_for_serialization.lock());
+        let mut restyled_svg_elements =
+            std::mem::take(&mut *image_resolver.restyled_svg_elements.lock());
+        restyled_svg_elements.sort_by_key(|address| address.0 as usize);
+        restyled_svg_elements.dedup();
 
         let lcp_candidate = self
             .paint_timing_handler
@@ -1191,6 +1196,7 @@ impl LayoutThread {
             pending_images,
             pending_rasterization_images,
             pending_svg_elements_for_serialization,
+            restyled_svg_elements,
             iframe_sizes: Some(iframe_sizes),
             reflow_statistics,
             changed_web_fonts,
