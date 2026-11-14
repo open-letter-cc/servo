@@ -598,7 +598,7 @@ fn test_svg_rasterization_now() {
     let url = ServoUrl::parse("http://example.com/image.svg").unwrap();
     let origin = mock_origin();
 
-    let id = match cache.get_cached_image_status(url.clone(), origin.clone(), None) {
+    let id = match cache.get_cached_image_status(url.clone(), &origin, None) {
         ImageCacheResult::ReadyForRequest(id) => id,
         _ => panic!("Expected ReadyForRequest"),
     };
@@ -622,7 +622,7 @@ fn test_svg_rasterization_now() {
     let vec_img = loop {
         handle_pending_key_requests(&cache, &key_receiver);
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let result = cache.get_cached_image_status(url.clone(), origin.clone(), None);
+        let result = cache.get_cached_image_status(url.clone(), &origin, None);
         let ImageCacheResult::Available(ImageOrMetadataAvailable::ImageAvailable { image, .. }) =
             result
         else {

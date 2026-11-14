@@ -2,11 +2,148 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_void};
 #[cfg(feature = "multiprocess")]
 use std::panic;
 
-use servo_api::Servo;
+use servo_api::{Servo, SiteStateImportMode, SiteStateKind};
+
+/// `kind` for [`servo_site_state_export`] and [`servo_site_state_import`]: the cookie jar.
+pub const SERVO_SITE_STATE_COOKIES: i32 = 0;
+/// `kind`: the HTTP Strict Transport Security list, without the preload list.
+pub const SERVO_SITE_STATE_HSTS: i32 = 1;
+/// `kind`: the HTTP authentication cache. It holds user names and passwords in the
+/// clear, as its file in the config directory does.
+pub const SERVO_SITE_STATE_AUTH_CACHE: i32 = 2;
+
+/// `mode` for [`servo_site_state_import`]: keep what is held and add what is imported.
+/// Where both have the same cookie (name, domain and path), HSTS host or authentication
+/// entry, the more recent one wins: the later last access for a cookie, the later expiry
+/// for an HSTS entry, the imported one for an authentication entry. Nothing is removed,
+/// so a deletion does not travel through a merge; use replace for that.
+pub const SERVO_SITE_STATE_MERGE: i32 = 0;
+/// `mode`: discard what is held and keep only what is imported.
+pub const SERVO_SITE_STATE_REPLACE: i32 = 1;
+
+fn site_state_kind(kind: i32) -> Option<SiteStateKind> {
+    match kind {
+        SERVO_SITE_STATE_COOKIES => Some(SiteStateKind::Cookies),
+        SERVO_SITE_STATE_HSTS => Some(SiteStateKind::Hsts),
+        SERVO_SITE_STATE_AUTH_CACHE => Some(SiteStateKind::AuthCache),
+        _ => None,
+    }
+}
+
+/// Exports one kind of this engine's persistent site state, so that an embedder running
+/// several engines can keep one store for all of them.
+///
+/// `kind` is one of the `SERVO_SITE_STATE_*` kinds. The state is serialized as UTF-8
+/// JSON, in the form of its file in the config directory, and passed to `callback`
+/// before this function returns: `data_ptr`/`data_len` are borrowed for the duration of
+/// the callback only. Only the public state is exported, never private browsing state.
+/// Session cookies are included.
+///
+/// Engines write this state to the config directory when they exit, each overwriting the
+/// whole file. An embedder that keeps one store for several engines sets the preference
+/// `network_site_state_write_on_exit` to false and moves the state with this function and
+/// [`servo_site_state_import`].
+///
+/// Returns 0, or -1 if `kind` is not a `SERVO_SITE_STATE_*` kind or `callback` is null,
+/// in which case nothing is called.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `servo` is a non-null pointer to a `Servo` previously returned by
+///   `servo_builder_build` and not yet freed.
+/// - `callback` is null or safe to call with the signature shown, does not unwind across
+///   the FFI boundary, and does not call back into this `Servo`.
+/// - The call is made from the thread that created `servo`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_site_state_export(
+    servo: *mut Servo,
+    kind: i32,
+    callback: Option<
+        unsafe extern "C" fn(data_ptr: *const u8, data_len: usize, user_data: *mut c_void),
+    >,
+    user_data: *mut c_void,
+) -> i32 {
+    assert!(!servo.is_null(), "servo pointer must not be null");
+    let (Some(kind), Some(callback)) = (site_state_kind(kind), callback) else {
+        return -1;
+    };
+
+    // SAFETY: The caller is assumed to uphold the safety requirements for `servo`
+    // documented above.
+    let servo = unsafe { &*servo };
+    let data = servo.site_data_manager().export_site_state(kind);
+
+    // SAFETY: The caller is assumed to uphold the safety requirements for `callback`;
+    // `data` outlives the call.
+    unsafe { callback(data.as_ptr(), data.len(), user_data) };
+    0
+}
+
+/// Imports one kind of persistent site state, as exported by [`servo_site_state_export`]
+/// from this or another engine, into this engine's public (non-private) state.
+///
+/// `kind` is one of the `SERVO_SITE_STATE_*` kinds and `mode` is
+/// [`SERVO_SITE_STATE_MERGE`] or [`SERVO_SITE_STATE_REPLACE`]. `data_ptr`/`data_len`
+/// are the exported bytes, borrowed for the duration of the call.
+///
+/// Returns 0 once the state is imported, -1 if `kind` or `mode` is unknown, or -2 if
+/// the data could not be parsed as that kind of state; on -1 or -2 the state is as it
+/// was. A failure to parse is logged.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+///
+/// - `servo` is a non-null pointer to a `Servo` previously returned by
+///   `servo_builder_build` and not yet freed.
+/// - `data_ptr` is either null with a `data_len` of zero, or valid for reads of
+///   `data_len` bytes for the duration of the call.
+/// - The call is made from the thread that created `servo`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn servo_site_state_import(
+    servo: *mut Servo,
+    kind: i32,
+    mode: i32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    assert!(!servo.is_null(), "servo pointer must not be null");
+    let Some(kind) = site_state_kind(kind) else {
+        return -1;
+    };
+    let mode = match mode {
+        SERVO_SITE_STATE_MERGE => SiteStateImportMode::Merge,
+        SERVO_SITE_STATE_REPLACE => SiteStateImportMode::Replace,
+        _ => return -1,
+    };
+    let data = if data_ptr.is_null() || data_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: The caller is assumed to uphold the safety requirements for
+        // `data_ptr` and `data_len` documented above.
+        unsafe { std::slice::from_raw_parts(data_ptr, data_len) }.to_vec()
+    };
+
+    // SAFETY: The caller is assumed to uphold the safety requirements for `servo`
+    // documented above.
+    let servo = unsafe { &*servo };
+    match servo
+        .site_data_manager()
+        .import_site_state(kind, data, mode)
+    {
+        Ok(()) => 0,
+        Err(error) => {
+            log::warn!("servo_site_state_import: {error}");
+            -2
+        },
+    }
+}
 
 /// Destroys the `Servo` instance returned by `servo_builder_build` and
 /// frees its memory.
