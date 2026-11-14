@@ -168,7 +168,8 @@ use crate::navigation::{InProgressLoad, NavigationListener};
 use crate::realms::enter_auto_realm;
 use crate::runtime::job_queue::{MicrotaskRunnable, job_queue_microtask_checkpoint};
 use crate::runtime::script_runtime::{
-    IntroductionType, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext, get_reports,
+    IntroductionType, JSThreadKind, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext,
+    get_reports, set_js_thread_stack_size,
 };
 use crate::scripting::fetching_options::ScriptFetchOptions;
 use crate::scripting::script_execution::{RethrowErrors, ScriptOptions};
@@ -496,10 +497,13 @@ impl ScriptThreadFactory for ScriptThread {
         PipelineNamespace::set_installer_sender(state.namespace_request_sender.clone());
 
         let script_thread_id = state.id;
+        // 8 MiB by default, to be consistent with other browsers.
+        let stack_size = JSThreadKind::Script.stack_size();
         thread::Builder::new()
             .name(format!("Script#{script_thread_id}"))
-            .stack_size(8 * 1024 * 1024) // 8 MiB stack to be consistent with other browsers.
+            .stack_size(stack_size)
             .spawn(move || {
+                set_js_thread_stack_size(stack_size);
                 profile_traits::debug_event!(
                     "ScriptThread::spawned",
                     script_thread_id = script_thread_id.to_string()

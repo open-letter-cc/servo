@@ -44,8 +44,8 @@ use js::rust::wrappers2::{
     CollectServoSizes, ContextOptionsRef, DispatchableRun, InitConsumeStreamCallback,
     JS_AddExtraGCRootsTracer, JS_GetPromiseResult, JS_InitDestroyPrincipalsCallback,
     JS_InitReadPrincipalsCallback, JS_NewStringCopyUTF8N, JS_SetGCCallback, JS_SetGCParameter,
-    JS_SetGlobalJitCompilerOption, JS_SetOffthreadIonCompilationEnabled, JS_SetSecurityCallbacks,
-    SetDOMCallbacks, SetGCSliceCallback, SetPreserveWrapperCallbacks,
+    JS_SetGlobalJitCompilerOption, JS_SetNativeStackQuota, JS_SetOffthreadIonCompilationEnabled,
+    JS_SetSecurityCallbacks, SetDOMCallbacks, SetGCSliceCallback, SetPreserveWrapperCallbacks,
     SetPromiseRejectionTrackerCallback, SetUpEventLoopDispatch,
 };
 use js::rust::{
@@ -556,6 +556,55 @@ pub(crate) struct Runtime {
     runtime_callback_data: Box<RuntimeCallbackData>,
 }
 
+/// The kinds of thread that run JavaScript, each with its own stack size preference.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum JSThreadKind {
+    /// A script thread, which runs the documents of an event loop.
+    Script,
+    /// A worker or worklet thread.
+    Worker,
+}
+
+/// The smallest stack, in KiB, that a JavaScript thread is given.
+const MIN_JS_THREAD_STACK_SIZE_KB: i64 = 1024;
+
+/// Stack kept beyond the untrusted-script limit for trusted and system code, as mozjs
+/// keeps by default.
+const SYSTEM_CODE_STACK_BUFFER: usize = 10 * 1024;
+const TRUSTED_SCRIPT_STACK_BUFFER: usize = 8 * 12800;
+
+thread_local! {
+    /// The stack size this thread was spawned with, if it is a JavaScript thread spawned
+    /// through [`JSThreadKind::stack_size`]. Read when its runtime is created.
+    static JS_THREAD_STACK_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+impl JSThreadKind {
+    /// The stack size, in bytes, to spawn a thread of this kind with, from preferences.
+    pub(crate) fn stack_size(self) -> usize {
+        let kilobytes = match self {
+            JSThreadKind::Script => pref!(thread_script_stack_size_kb),
+            JSThreadKind::Worker => pref!(thread_worker_stack_size_kb),
+        };
+        kilobytes.max(MIN_JS_THREAD_STACK_SIZE_KB) as usize * 1024
+    }
+}
+
+/// Record, on a newly spawned JavaScript thread, the stack size it was spawned with, so
+/// that the runtime created on it limits script to part of that stack. Call this first
+/// thing on the thread, before creating its [`Runtime`].
+pub(crate) fn set_js_thread_stack_size(stack_size: usize) {
+    JS_THREAD_STACK_SIZE.set(Some(stack_size));
+}
+
+/// The native stack quota for script on a thread with a stack of `stack_size` bytes: half
+/// of it. The other half is kept for the engine frames that run on the same thread below
+/// or between script frames: layout when it runs on the script thread, garbage
+/// collection, and native functions called from script.
+fn native_stack_quota(stack_size: usize) -> usize {
+    stack_size / 2
+}
+
 impl Runtime {
     /// Create a new runtime, optionally with the given [`SendableTaskSource`] for networking.
     ///
@@ -602,6 +651,20 @@ impl Runtime {
             RustRuntime::new(current_js_engine_handle())
         };
         let cx = runtime.cx();
+
+        // Let script use only part of this thread's stack, so that deep recursion throws
+        // a catchable "too much recursion" error well before the thread overflows.
+        if let Some(stack_size) = JS_THREAD_STACK_SIZE.get() {
+            let quota = native_stack_quota(stack_size);
+            unsafe {
+                JS_SetNativeStackQuota(
+                    cx,
+                    quota,
+                    quota - SYSTEM_CODE_STACK_BUFFER,
+                    quota - SYSTEM_CODE_STACK_BUFFER - TRUSTED_SCRIPT_STACK_BUFFER,
+                );
+            }
+        }
 
         let have_event_loop_sender = script_event_loop_sender.is_some();
         let runtime_callback_data = Box::new(RuntimeCallbackData {
