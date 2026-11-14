@@ -1,8 +1,6 @@
 name: Docs upload
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 jobs:

@@ -1,11 +1,6 @@
 name: Lint ktfmt
 on:
-  push:
-    paths:
-      - 'support/android/apk/**'
-  pull_request:
-    paths:
-      - 'support/android/apk/**'
+  workflow_dispatch:
 
 jobs:
   ktfmt-check:

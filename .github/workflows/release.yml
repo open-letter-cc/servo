@@ -2,6 +2,11 @@ name: Publish to crates.io
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: '`true` to publish. Off by default: a dispatch without it does nothing, since every job here publishes.'
+        type: boolean
+        default: false
 env:
   RUST_BACKTRACE: 1
   SHELL: /bin/bash
@@ -9,7 +14,7 @@ env:
 jobs:
   publish-crates-io:
     name: 'Publish to crates.io'
-    if: github.repository == 'servo/servo'
+    if: inputs.release && github.repository == 'servo/servo'
     environment:
       name: publish_crates_io
       deployment: false

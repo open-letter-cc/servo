@@ -59,3 +59,19 @@ servo_webview_content_process_id
 # for one created through servo_webview_accept_new. The two are classified together.
 servo_webview_builder_set_resource_request_callback
 servo_webview_set_resource_request_callback
+# Shows and hides a webview: a hidden one is not painted, its timers are throttled
+# and its documents, iframes included, are hidden with a visibilitychange event.
+servo_webview_show
+servo_webview_hide
+# Exports and imports an engine's cookie jar, HSTS list or auth cache, so that an
+# embedder running several engines keeps one store for all of them. The two are
+# classified together.
+servo_site_state_export
+servo_site_state_import
+# Bound one engine's threads: the script, worker and parallel-layout stack sizes
+# (script may use half of its thread's stack, so deep recursion throws instead of
+# overflowing) and the number of parallel layout threads.
+servo_preferences_set_script_thread_stack_size_kb
+servo_preferences_set_worker_thread_stack_size_kb
+servo_preferences_set_layout_thread_stack_size_kb
+servo_preferences_set_layout_threads

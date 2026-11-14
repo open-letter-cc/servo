@@ -15,53 +15,23 @@ run-name: >-
   Motor Controller (${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }})
 
 on:
-  # NOTE: kept in sync by hand with the `pull_request` list below. GitHub
-  # Actions does not expand YAML anchors, so the duplication is unavoidable.
-  #
-  # `components/**`, not just `components/servo/**`: the payload is compiled from
-  # every component, so a patch anywhere in them changes what ships, and a
-  # change that ships must be the one that builds it. servoshell's manifest is
-  # listed because its default features decide the payload's feature set (the
-  # shim is built in the same invocation and inherits them; see the build step).
-  push:
-    branches:
-      - "**"
-    # Release tags reach the FreeBSD rung, which runs on dispatch and tags only.
-    # paths filters are not evaluated for tag pushes, so the tag filter is what
-    # admits them.
-    tags:
-      - "capi-*"
-    paths:
-      - "vendor/motor-controller/**"
-      - "ffi/capi-full/**"
-      - "ffi/capi/**"
-      - "components/**"
-      - "ports/servoshell/Cargo.toml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/motor-controller.yaml"
-      - ".github/capi-exports/**"
-      - "tests/capi/**"
-  pull_request:
-    paths:
-      - "vendor/motor-controller/**"
-      - "ffi/capi-full/**"
-      - "ffi/capi/**"
-      - "components/**"
-      - "ports/servoshell/Cargo.toml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/motor-controller.yaml"
-      - ".github/capi-exports/**"
-      - "tests/capi/**"
-  # So the DLL can be rebuilt without touching source.
+  # This workflow runs only when dispatched: a push, pull request or tag starts
+  # nothing. A dispatch builds and tests; it publishes only with `release` on.
   workflow_dispatch:
     inputs:
+      release:
+        description: >-
+          Publish a GitHub Release from this run. Off by default: a dispatch
+          without it builds and tests only. With it on, a run dispatched on a
+          `capi-*` tag publishes every rung's payload under that tag once all of
+          them are green, and a run with `release-tag` set publishes the Windows
+          payload under that tag.
+        type: boolean
+        default: false
       singleprocess:
         description: >-
-          Build WITHOUT upstream's multiprocess feature. Off for every push, so
-          the payload a push produces is always the multiprocess one; the
-          single-process payload exists only when dispatched by hand.
+          Build WITHOUT upstream's multiprocess feature. Off by default, so the
+          payload is the multiprocess one unless this is turned on.
         type: boolean
         default: false
       android:
@@ -73,23 +43,24 @@ on:
         default: false
       windows:
         description: >-
-          Also build the Windows payload. On for every push and by default; a
-          dispatch that only wants the other rungs can turn it off, since the
-          Windows job is not a rung and nothing below depends on it.
+          Also build the Windows payload. On by default; a dispatch that only
+          wants the other rungs can turn it off, since the Windows job is not a
+          rung and nothing below depends on it.
         type: boolean
         default: true
       ladder:
         description: >-
-          Climb the ladder, from the `start-at` rung up. On for every push and
-          by default; off for a dispatch that only wants the Windows job.
+          Climb the ladder, from the `start-at` rung up. On by default; off for
+          a dispatch that only wants the Windows job.
         type: boolean
         default: true
       release-tag:
         description: >-
-          Publish the Windows payload from this run as a GitHub Release with this
-          tag (for example `capi-win-0.1.0`), created on the dispatched commit.
-          Empty by default: no release. Meant for a Windows-only dispatch
-          (`ladder` off); the full release still comes from a `capi-*` tag push.
+          With `release` on, publish the Windows payload from this run as a
+          GitHub Release with this tag (for example `capi-win-0.1.0`), created on
+          the dispatched commit. Empty by default. Meant for a Windows-only
+          dispatch (`ladder` off); the full release comes from a run dispatched
+          on a `capi-*` tag with `release` on.
         type: string
         default: ""
       start-at:
@@ -101,10 +72,6 @@ on:
         type: choice
         options: [linux, macos-arm64, macos-intel, freebsd, android]
         default: linux
-
-# The single-process variant is keyed separately, so dispatching one does not
-# cancel the push build of the default (multiprocess) payload. Without that they share a group
-# and the second to start kills the first.
 concurrency:
   group: motor-controller-${{ github.ref }}-${{ inputs.singleprocess && 'singleprocess' || 'multiprocess' }}
   cancel-in-progress: true
@@ -206,7 +173,7 @@ jobs:
       # list - the shim compiles every line of it already, so building it too
       # would only add a second multi-minute cdylib link of the same code.
       #
-      # Multiprocess is the default payload: every push builds with it on. The
+      # Multiprocess is the default payload: every run builds with it on. The
       # feature is enabled on the shim rather than globally: `--features
       # multiprocess` in a multi-package build would try to apply it to
       # servoshell too, which does not declare it. The single-process payload,
@@ -640,10 +607,9 @@ jobs:
           singleprocess: ${{ inputs.singleprocess && 'true' || 'false' }}
           sandbox: ${{ !inputs.singleprocess && 'true' || 'false' }}
 
-  # Rung 5: FreeBSD x86-64, a release gate rather than a push gate. There is
-  # no FreeBSD runner image, so the build runs inside a FreeBSD virtual machine
-  # on a Linux runner, and a cold libservo build there takes most of a job's
-  # allowance; it runs on dispatch and on release tags only. No sandbox arm is
+  # Rung 5: FreeBSD x86-64, a release gate. There is no FreeBSD runner image, so
+  # the build runs inside a FreeBSD virtual machine on a Linux runner, and a
+  # cold libservo build there takes most of a job's allowance. No sandbox arm is
   # needed: gaol's Capsicum backend accepts the generic Unix profile and the
   # child calls cap_enter, so the C suite runs with the sandbox on and the
   # containment test is the proof that a content process still serves pages
@@ -652,15 +618,14 @@ jobs:
   # mach does not bootstrap FreeBSD, so the packages are named here. The list
   # mirrors what upstream's Linux bootstrap installs.
   build-freebsd:
-    name: FreeBSD x86-64 libservo shared object (multiprocess, sandbox on; dispatch and tags)
+    name: FreeBSD x86-64 libservo shared object (multiprocess, sandbox on)
     needs: build-macos-intel
     # Direct rung only, for the reason given on the Intel job; or starts here.
     if: >-
       ${{ !cancelled() && (
             needs.build-macos-intel.result == 'success'
             || (github.event_name == 'workflow_dispatch' && inputs.ladder && inputs.start-at == 'freebsd')
-          )
-          && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
+          ) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 355
     steps:
@@ -776,8 +741,8 @@ jobs:
             || (github.event_name == 'workflow_dispatch' && inputs.ladder
                 && (inputs.start-at == 'freebsd' || inputs.start-at == 'android'))
           )
-          && ((github.event_name == 'workflow_dispatch' && inputs.android)
-              || startsWith(github.ref, 'refs/tags/capi-')) }}
+          && (inputs.android
+              || (inputs.release && startsWith(github.ref, 'refs/tags/capi-'))) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 350
     env:
@@ -890,10 +855,10 @@ jobs:
   # over the zips. The release is as good as the rungs: a red rung means no
   # release, so a tag never publishes a payload that failed its gate.
   release:
-    name: GitHub Release from the rungs' payloads (tags)
+    name: GitHub Release from the rungs' payloads (dispatch on a tag, release on)
     needs: [build, build-linux, build-linux-arm64, build-macos-arm64, build-macos-intel, build-freebsd, build-android]
     if: >-
-      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/capi-')
+      ${{ !cancelled() && inputs.release && startsWith(github.ref, 'refs/tags/capi-')
           && needs.build.result == 'success'
           && needs.build-linux.result == 'success'
           && needs.build-linux-arm64.result == 'success'
@@ -950,16 +915,16 @@ jobs:
           gh release create "${{ github.ref_name }}" release/*.zip release/SHA256SUMS --title "${{ github.ref_name }}" --notes-file notes.md --verify-tag
 
   # ---------------------------------------------------------------------------
-  # Windows-only release, by dispatch with `release-tag` set. The full release
+  # Windows-only release, by dispatch with `release` on and `release-tag` set. The full release
   # above needs every rung green; this one publishes just the signed Windows
   # payload for when the other platforms are not being shipped yet. It needs
   # only `build`, whose success already means the three DLLs were signed and
   # verified Valid, the export gate passed and the hang-containment test passed.
   release-windows:
-    name: GitHub Release from the Windows payload (dispatch)
+    name: GitHub Release from the Windows payload (dispatch, release on)
     needs: [build]
     if: >-
-      ${{ !cancelled() && github.event_name == 'workflow_dispatch'
+      ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release
           && inputs.release-tag != '' && inputs.windows
           && needs.build.result == 'success' }}
     runs-on: ubuntu-22.04

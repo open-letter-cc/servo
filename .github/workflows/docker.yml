@@ -2,19 +2,7 @@ name: Build Docker image and push to GitHub Packages
 
 # This workflow file is adapted from the example at https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#upgrading-a-workflow-that-accesses-a-registry-using-a-personal-access-token
 on:
-  push:
-    branches:
-      - main
-    # Only rebuild if the Dockerfile or dependencies change.
-    paths: &container-paths
-      - '.devcontainer/**'
-      - 'python/servo/platform/linux_packages/**'
-      - '.github/workflows/docker.yml'
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
-    paths: *container-paths
 
 env:
   IMAGE_NAME: devcontainer-ubuntu
