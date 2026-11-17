@@ -1245,10 +1245,6 @@ impl Servo {
         self.0.delegate.borrow().clone()
     }
 
-    pub(crate) fn embedder_proxy(&self) -> &EmbedderProxy {
-        &self.0.embedder_proxy
-    }
-
     pub fn set_delegate(&self, delegate: Rc<dyn ServoDelegate>) {
         *self.0.delegate.borrow_mut() = delegate;
     }
@@ -1711,3 +1707,8 @@ fn register_system_memory_reporter_for_event_loop(
             Reporter(callback),
         ));
 }
+
+#[path = "../../vendor/open-letter/components/servo/servo.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -537,17 +537,6 @@ impl Window {
         self.webview_state.clone()
     }
 
-    /// The visibility state that this [`Window`]'s documents should have given whether
-    /// the embedder has hidden its `WebView`.
-    /// <https://html.spec.whatwg.org/multipage/#system-visibility-state>
-    pub(crate) fn system_visibility_state(&self) -> DocumentVisibilityState {
-        if self.webview_state.hidden.get() {
-            DocumentVisibilityState::Hidden
-        } else {
-            DocumentVisibilityState::Visible
-        }
-    }
-
     pub(crate) fn as_global_scope(&self) -> &GlobalScope {
         self.upcast::<GlobalScope>()
     }
@@ -4590,3 +4579,8 @@ impl HasOrigin for Window {
         Window::origin(self)
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/window/window.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -201,27 +201,6 @@ impl SystemFontService {
         });
     }
 
-    /// Read a local font's bytes, once, into shared memory. The mapping of the file
-    /// is turned into a shared-memory segment here rather than at every send, since
-    /// sending a memory-mapped [`FontData`] copies it each time.
-    #[servo_tracing::instrument(skip_all)]
-    fn get_local_font_data(
-        &mut self,
-        identifier: LocalFontIdentifier,
-    ) -> Option<FontDataAndIndex> {
-        self.local_font_data
-            .entry(identifier)
-            .or_insert_with_key(|identifier| {
-                identifier
-                    .font_data_and_index()
-                    .map(|FontDataAndIndex { data, index }| FontDataAndIndex {
-                        data: FontData::SharedMemory(data.as_ipc_shared_memory()),
-                        index,
-                    })
-            })
-            .clone()
-    }
-
     #[servo_tracing::instrument(skip_all)]
     fn fetch_font_keys_if_needed(&mut self, painter_id: PainterId) {
         let free_font_keys = self.free_font_keys.entry(painter_id).or_default();
@@ -388,3 +367,8 @@ impl SystemFontService {
             .clone()
     }
 }
+
+#[path = "../../vendor/open-letter/components/fonts/system_font_service.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

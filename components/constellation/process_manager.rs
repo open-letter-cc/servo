@@ -66,11 +66,6 @@ impl ProcessManager {
         receiver
     }
 
-    pub fn pid_at(&self, index: usize) -> u32 {
-        let (process, _) = &self.processes[index];
-        process.pid()
-    }
-
     #[servo_tracing::instrument(skip_all)]
     pub fn remove(&mut self, index: usize) {
         let (mut process, _) = self.processes.swap_remove(index);
@@ -84,3 +79,8 @@ impl ProcessManager {
         process.wait();
     }
 }
+
+#[path = "../../vendor/open-letter/components/constellation/process_manager.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

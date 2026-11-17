@@ -110,20 +110,6 @@ where
     }
 }
 
-/// The outermost `<svg>` element among the inclusive ancestors of `element` that are in
-/// the SVG namespace: the inline `<svg>` whose serialization contains `element`.
-fn outermost_svg_element<E: TElement>(element: E) -> Option<E> {
-    let mut outermost = None;
-    let mut current = Some(element);
-    while let Some(candidate) = current.filter(|candidate| candidate.is_svg_element()) {
-        if candidate.has_local_name(&web_atoms::local_name!("svg")) {
-            outermost = Some(candidate);
-        }
-        current = candidate.traversal_parent();
-    }
-    outermost
-}
-
 #[servo_tracing::instrument(skip_all)]
 pub(crate) fn compute_damage_and_rebuild_box_tree<'dom>(
     box_tree: &mut Option<Arc<BoxTree>>,
@@ -564,3 +550,8 @@ impl<'a> ElementDamageSet<'a> {
         );
     }
 }
+
+#[path = "../../vendor/open-letter/components/layout/traversal.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

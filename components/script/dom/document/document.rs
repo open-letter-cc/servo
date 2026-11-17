@@ -4067,33 +4067,6 @@ impl Document {
         &self.live_ranges
     }
 
-    /// Called when the system visibility state of this document's `WebView` changes,
-    /// because the embedder hid or showed it. Nested documents follow their `WebView`.
-    ///
-    /// <https://html.spec.whatwg.org/multipage/#system-visibility-state>
-    pub(crate) fn system_visibility_changed(&self) {
-        // Documents that are not active (for instance those in the session history)
-        // get their visibility state again when they are reactivated.
-        if !self.is_active() {
-            return;
-        }
-        // Queue a global task on the user interaction task source given the document's
-        // relevant global object to update the visibility state of the document to the
-        // new visibility state.
-        let document = Trusted::new(self);
-        self.owner_global()
-            .task_manager()
-            .user_interaction_task_source()
-            .queue(task!(update_visibility_state: move |cx| {
-                let document = document.root();
-                if !document.is_active() {
-                    return;
-                }
-                let visibility_state = document.window().system_visibility_state();
-                document.update_visibility_state(cx, visibility_state);
-            }));
-    }
-
     pub(crate) fn gained_or_lost_system_focus(&self, cx: &mut JSContext, gained_focus: bool) {
         let focus_handler = self.focus_handler();
         if !self.is_fully_active() || !focus_handler.has_focus() {
@@ -7931,3 +7904,8 @@ impl Iterator for LocalDescendantNavigablesIterator {
         None
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/document/document.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

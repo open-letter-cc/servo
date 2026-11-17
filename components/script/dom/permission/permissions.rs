@@ -354,18 +354,6 @@ pub(crate) fn request_permission_to_use(
     descriptor_permission_state(name, Some(global_scope))
 }
 
-/// The browsing context of the frame `global_scope` belongs to, reported to the embedder
-/// with a permission request so that it can tell frames apart. `None` for a global with
-/// no frame of its own, such as a worker.
-pub(crate) fn requesting_browsing_context(
-    global_scope: &GlobalScope,
-) -> Option<servo_base::id::BrowsingContextId> {
-    global_scope
-        .downcast::<Window>()?
-        .undiscarded_window_proxy()
-        .map(|window_proxy| window_proxy.browsing_context_id())
-}
-
 fn prompt_user_from_embedder(name: PermissionName, global_scope: &GlobalScope) -> PermissionState {
     let Some(webview_id) = global_scope.webview_id() else {
         warn!("Requesting permissions from non-webview-associated global scope");
@@ -470,3 +458,8 @@ impl Convert<PermissionFeature> for PermissionName {
         }
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/permission/permissions.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

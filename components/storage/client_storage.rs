@@ -82,15 +82,6 @@ impl SqliteEngine {
         })
     }
 
-    /// An in-memory registry for temporary storage, whose databases are in memory too,
-    /// so no directory is created for them.
-    fn temporary() -> rusqlite::Result<Self> {
-        Ok(SqliteEngine {
-            in_memory: true,
-            ..Self::memory()?
-        })
-    }
-
     fn init(connection: &Connection) -> rusqlite::Result<()> {
         connection.execute(r#"PRAGMA foreign_keys = ON;"#, [])?;
         connection.execute(
@@ -821,3 +812,8 @@ where
         }
     }
 }
+
+#[path = "../../vendor/open-letter/components/storage/client_storage.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

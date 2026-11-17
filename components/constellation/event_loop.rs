@@ -189,12 +189,6 @@ impl EventLoop {
         self.id
     }
 
-    /// The operating-system id of the content process this event loop runs in, or
-    /// `None` when it runs in this process.
-    pub(crate) fn process_id(&self) -> Option<u32> {
-        self.process_id
-    }
-
     /// Send a message to the event loop.
     pub fn send(&self, msg: ScriptThreadMessage) -> Result<(), SendError> {
         self.script_chan.send(msg)
@@ -227,3 +221,8 @@ pub struct NewScriptEventLoopProcessInfo {
     /// The broken image icon data that is used to create an image to show in place of broken images.
     pub broken_image_icon_data: Vec<u8>,
 }
+
+#[path = "../../vendor/open-letter/components/constellation/event_loop.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

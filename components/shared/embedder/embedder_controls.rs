@@ -34,13 +34,6 @@ pub struct EmbedderControlId {
     pub index: Epoch,
 }
 
-impl EmbedderControlId {
-    /// The browsing context of the frame whose document asked for this control.
-    pub fn browsing_context_id(&self) -> BrowsingContextId {
-        self.browsing_context_id
-    }
-}
-
 /// A request from the engine to the embedder to display a user interface control.
 #[derive(Debug, Deserialize, Serialize)]
 pub enum EmbedderControlRequest {
@@ -245,3 +238,8 @@ pub enum PromptResponse {
     Ok(String),
     Cancel,
 }
+
+#[path = "../../../vendor/open-letter/components/shared/embedder/embedder_controls.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;
