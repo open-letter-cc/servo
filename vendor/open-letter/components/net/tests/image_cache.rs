@@ -6,29 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::sync::Arc;
-use std::time::Duration;
-use crossbeam_channel::{Receiver, Sender, unbounded};
-use malloc_size_of_derive::MallocSizeOf;
-use net::image_cache::ImageCacheFactoryImpl;
-use net_traits::image_cache::{
-    FontResolver, ImageCache, ImageCacheFactory, ImageCacheResponseMessage, ImageCacheResult,
-    ImageLoadListener, ImageOrMetadataAvailable, ImageResponse, PendingImageId,
-    PendingImageResponse, RasterizationResult,
-};
-use net_traits::request::RequestId;
-use net_traits::{
-    FetchMetadata, FetchResponseMsg, FilteredMetadata, Metadata, NetworkError, ResourceFetchTiming,
-    ResourceTimingType,
-};
-use paint_api::{CrossProcessPaintApi, PaintMessage};
-use resvg::usvg::{Font, fontdb};
-use servo_base::id::{PipelineId, TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
-use servo_url::ServoUrl;
-use uuid::Uuid;
-use webrender_api::ImageKey;
-use crate::mock_origin;
-
 /// `rasterize_vector_image_now` returns pixels on the calling thread, without a WebRender
 /// key: key requests are deliberately left unanswered once the image has loaded.
 #[test]

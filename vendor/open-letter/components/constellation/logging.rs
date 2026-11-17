@@ -6,20 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::borrow::ToOwned;
-use std::cell::Cell;
-use std::sync::Arc;
-use std::thread;
-use backtrace::Backtrace;
-use crossbeam_channel::Sender;
-use log::{Level, LevelFilter, Log, Metadata, Record};
-use parking_lot::ReentrantMutex;
-use servo_base::id::{ScriptEventLoopId, TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
-use servo_constellation_traits::{
-    EmbedderToConstellationMessage, LogEntry, ScriptToConstellationMessage,
-    ScriptToConstellationSender,
-};
-
 /// Run `log` unless this thread is already inside one of the loggers here.
 ///
 /// Sending a record can itself log: a failed IPC send logs its I/O error. That record

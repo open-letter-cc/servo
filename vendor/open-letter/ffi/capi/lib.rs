@@ -6,9 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use options::ServoOptions;
-use preferences::ServoPreferences;
-
 /// The ABI version of this capi surface.
 ///
 /// This is incremented whenever a struct layout, an enum's numbering, or a

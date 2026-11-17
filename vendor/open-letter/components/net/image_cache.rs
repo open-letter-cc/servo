@@ -6,42 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::{Cell, OnceCell};
-use std::cmp::min;
-use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
-use std::{mem, thread_local};
-use imsz::imsz_from_reader;
-use log::{debug, error, warn};
-use malloc_size_of::{MallocConditionalSizeOf, MallocSizeOf as MallocSizeOfTrait, MallocSizeOfOps};
-use malloc_size_of_derive::MallocSizeOf;
-use mime::Mime;
-use net_traits::image_cache::{
-    FontResolver, Image, ImageCache, ImageCacheFactory, ImageCacheResponseCallback,
-    ImageCacheResponseMessage, ImageCacheResult, ImageLoadListener, ImageOrMetadataAvailable,
-    ImageResponse, PendingImageId, RasterizationCompleteResponse, RasterizationResult, VectorImage,
-};
-use net_traits::request::CorsSettings;
-use net_traits::{FetchResponseMsg, Metadata, NetworkError};
-use paint_api::{CrossProcessPaintApi, ImageUpdate, SerializableImageData};
-use parking_lot::Mutex;
-use pixels::{CorsStatus, ImageFrame, ImageMetadata, PixelFormat, RasterImage, load_from_memory};
-use profile_traits::mem::{Report, ReportKind};
-use profile_traits::path;
-use resvg::tiny_skia;
-use resvg::usvg::{self, fontdb};
-use rustc_hash::{FxHashMap, FxHashSet};
-use servo_base::cross_process_instant::CrossProcessInstant;
-use servo_base::id::{PipelineId, WebViewId};
-use servo_base::threadpool::ThreadPool;
-use servo_url::{ImmutableOrigin, ServoUrl};
-use uuid::Uuid;
-use webrender_api::ImageKey as WebRenderImageKey;
-use webrender_api::units::DeviceIntSize;
-use crate::image_cache::KeyCacheState::PipelineClosed;
-
 /// The size of the pixmap that rasterizing `svg_tree` at `requested_size` allocates:
 /// clamped to [`MAX_SVG_PIXMAP_DIMENSION`] on each axis, or the clamped natural size if
 /// the requested one is empty or not representable. `None` if the natural size has a

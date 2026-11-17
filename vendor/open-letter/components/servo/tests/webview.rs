@@ -6,41 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
-use dpi::PhysicalSize;
-use embedder_traits::{RefreshDriver, UrlRequest};
-use euclid::default::Size2D as UntypedSize2D;
-use euclid::{Point2D, Size2D};
-use http::{HeaderMap, HeaderName, HeaderValue};
-use http_body_util::combinators::BoxBody;
-use hyper::body::{Bytes, Incoming};
-use hyper::{Request as HyperRequest, Response as HyperResponse};
-use image::RgbaImage;
-use itertools::Itertools;
-use net::test_util::{make_body, make_server, replace_host_table};
-use servo::JSValue::Boolean;
-use servo::profile_traits::mem::MemoryReportResult;
-use servo::{
-    CreateNewWebViewRequest, Cursor, EmbedderControl, InputEvent, InputMethodType, JSValue,
-    LoadStatus, MouseButton, MouseLeftViewportEvent, MouseMoveEvent, PrefValue, RenderingContext,
-    Scroll, SimpleDialog, Theme, WebView, WebViewBuilder, WebViewDelegate, WebViewPoint,
-    WebViewVector,
-};
-use servo_base::generic_channel::GenericCallback;
-use servo_config::prefs::Preferences;
-use servo_url::ServoUrl;
-use surfman::{Error, Surface, SurfaceTexture};
-use url::Url;
-use webrender_api::units::{DeviceIntRect, DeviceIntSize, DevicePoint, DeviceVector2D};
-use crate::common::{
-    ServoTest, WebViewDelegateImpl, click_at_point, evaluate_javascript,
-    show_webview_and_wait_for_rendering_to_be_ready, wait_for_webview_scene_to_be_up_to_date,
-};
-
 /// A solid green, 64x64 PNG.
 pub(super) fn green_png() -> Vec<u8> {
     let image = RgbaImage::from_pixel(64, 64, image::Rgba([0, 128, 0, 255]));

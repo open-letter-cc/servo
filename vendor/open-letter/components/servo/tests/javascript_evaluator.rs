@@ -6,15 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::rc::Rc;
-use http::{HeaderName, HeaderValue};
-use http_body_util::combinators::BoxBody;
-use hyper::body::{Bytes, Incoming};
-use hyper::{Request as HyperRequest, Response as HyperResponse};
-use net::test_util::{make_body, make_server};
-use servo::{JSValue, JavaScriptEvaluationError, WebViewBuilder};
-use crate::common::{ServoTest, WebViewDelegateImpl, evaluate_javascript};
-
 /// A function that recurses until the engine stops it, and returns
 /// `[depth reached, error]`.
 pub(super) const RECURSE_UNTIL_STOPPED_FUNCTION: &str = "function recurseUntilStopped() {\

@@ -6,36 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::Cell;
-use atomic_refcell::AtomicRefCell;
-use base64::Engine as _;
-use bytes::Bytes;
-use dom_struct::dom_struct;
-use html5ever::{LocalName, Prefix, local_name, ns};
-use js::rust::HandleObject;
-use net_traits::blob_url_store::UrlWithBlobClaim;
-use net_traits::request::{Destination, RequestBuilder, RequestId};
-use net_traits::{FetchMetadata, NetworkError, ResourceFetchTiming};
-use servo_url::ServoUrl;
-use style::attr::AttrValue;
-use crate::dom::bindings::inheritance::Castable;
-use crate::dom::bindings::refcounted::Trusted;
-use crate::dom::bindings::root::DomRoot;
-use crate::dom::bindings::str::DOMString;
-use crate::dom::csp::{GlobalCspReporting, Violation};
-use crate::dom::document::Document;
-use crate::dom::element::AttributeMutation;
-use crate::dom::element::attributes::storage::AttrRef;
-use crate::dom::globalscope::GlobalScope;
-use crate::dom::node::virtualmethods::VirtualMethods;
-use crate::dom::node::{Node, NodeTraits};
-use crate::dom::performance::performanceresourcetiming::InitiatorType;
-use crate::dom::svg::svggraphicselement::SVGGraphicsElement;
-use crate::dom::svg::svgsvgelement::SVGSVGElement;
-use crate::event_loop::document_loader::LoadType;
-use crate::fetch::fetch::RequestWithGlobalScope;
-use crate::fetch::network_listener::{self, FetchResponseListener, ResourceTimingListener};
-
 /// The MIME type of an image the SVG rasterizer can decode, from its first bytes.
 pub(super) fn sniff_image_type(bytes: &[u8], content_type: Option<&str>) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {

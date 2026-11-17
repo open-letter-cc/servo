@@ -6,10 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use servo_api::{DeviceIntRect, RgbaImage, SoftwareRenderingContext};
-
 impl RenderingContext {
     /// Wraps a context in a new handle. `always_capture` arms frame capture from the
     /// first present rather than from the first read; see [`FrameCapture`].

@@ -6,23 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use log::{info, warn};
-use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
-use rusqlite::{Connection, Error, OptionalExtension, params};
-use sea_query::{Condition, Expr, ExprTrait, IntoCondition, SqliteQueryBuilder};
-use sea_query_rusqlite::RusqliteBinder;
-use servo_base::threadpool::ThreadPool;
-use storage_traits::indexeddb::{
-    AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, AsyncSchemaOperation,
-    BackendError, CreateObjectResult, IndexedDBIndex, IndexedDBKeyRange, IndexedDBKeyType,
-    IndexedDBRecord, IndexedDBTxnMode, KeyPath, PutItemResult,
-};
-use crate::indexeddb::IndexedDBDescription;
-use crate::indexeddb::engines::{KvsEngine, KvsTransaction};
-use crate::shared::{DB_INIT_PRAGMAS, DB_PRAGMAS};
-
 impl SqliteEngine {
     /// Opens the database for `path` in memory, for temporary storage, so that nothing
     /// it holds outlives the process.

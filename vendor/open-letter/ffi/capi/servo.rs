@@ -6,10 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::ffi::{CStr, c_char, c_void};
-use std::panic;
-use servo_api::{Servo, SiteStateImportMode, SiteStateKind};
-
 /// `kind` for [`servo_site_state_export`] and [`servo_site_state_import`]: the cookie jar.
 pub const SERVO_SITE_STATE_COOKIES: i32 = 0;
 

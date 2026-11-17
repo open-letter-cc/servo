@@ -6,13 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::time::{Duration, SystemTime};
-use net::cookie::ServoCookie;
-use net::cookie_storage::CookieStorage;
-use net_traits::CookieSource;
-use servo_url::ServoUrl;
-use time::macros::datetime;
-
 #[test]
 pub(super) fn test_cookie_storage_merge() {
     let url = ServoUrl::parse("http://example.com/").unwrap();

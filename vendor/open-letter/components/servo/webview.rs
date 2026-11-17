@@ -6,50 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::hash::Hash;
-use std::rc::{Rc, Weak};
-use accesskit::{
-    Affine as AccesskitAffine, Node as AccesskitNode, NodeId, Rect as AccesskitRect, Role, Tree,
-    TreeId, TreeUpdate, Uuid as AccesskitUuid,
-};
-use dpi::PhysicalSize;
-use embedder_traits::{
-    ContextMenuAction, ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlRequest,
-    EmbedderMsg, Image,
-    InputEvent, InputEventAndId, InputEventId, JSValue, JavaScriptEvaluationError, LoadStatus,
-    MediaSessionActionType, NewWebViewDetails, ScreenGeometry, ScreenshotCaptureError, Scroll,
-    Theme, TraversalId, UrlRequest, ViewportDetails, WebViewPoint, WebViewRect,
-};
-use euclid::{Scale, Size2D};
-use image::RgbaImage;
-use log::debug;
-use paint_api::WebViewTrait;
-use paint_api::rendering_context::RenderingContext;
-use servo_base::Epoch;
-use servo_base::generic_channel::GenericSender;
-use servo_base::id::WebViewId;
-use servo_config::pref;
-use servo_constellation_traits::{
-    EmbedderToConstellationMessage, HistoryTraversalSource, SessionHistoryTraversalRequest,
-    TraversalDirection,
-};
-use servo_geometry::DeviceIndependentPixel;
-use servo_url::{ImmutableOrigin, ServoUrl};
-use style_traits::CSSPixel;
-use url::Url;
-use webrender_api::units::{DeviceIntRect, DevicePixel, DevicePoint, DeviceSize};
-use crate::clipboard_delegate::{ClipboardDelegate, DefaultClipboardDelegate};
-use crate::gamepad_delegate::{DefaultGamepadDelegate, GamepadDelegate};
-use crate::geolocation_delegate::{DefaultGeolocationDelegate, GeolocationDelegate};
-use crate::responders::AutomaticResponder;
-use crate::servo::PendingHandledInputEvent;
-use crate::webview_delegate::{CreateNewWebViewRequest, DefaultWebViewDelegate, WebViewDelegate};
-use crate::{
-    ColorPicker, ContextMenu, EmbedderControl, InputMethodControl, PageRequest, SelectElement,
-    Servo, UserContentManager, WebRenderDebugOption,
-};
-
 impl WebView {
     /// Generic embedder control extension, no domain logic.
     ///

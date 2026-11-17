@@ -6,10 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::ffi::{CStr, c_char, c_void};
-use std::{ptr, slice};
-use servo::{PrefValue, Preferences};
-
 // Resource limits for the threads of one engine. Each is a named form of a preference
 // that can also be set by name; these document the units and refuse values out of range.
 

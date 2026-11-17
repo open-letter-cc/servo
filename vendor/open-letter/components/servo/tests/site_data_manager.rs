@@ -6,21 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use cookie::Cookie;
-use http::HeaderValue;
-use http_body_util::combinators::BoxBody;
-use hyper::body::{Bytes, Incoming};
-use hyper::{Request as HyperRequest, Response as HyperResponse};
-use net::test_util::{Server, make_body, make_server, replace_host_table};
-use net_traits::CookieSource;
-use net_traits::blob_url_store::UrlWithBlobClaim;
-use servo::{JSValue, Servo, ServoUrl, SiteData, StorageType, WebView, WebViewBuilder};
-use crate::common::{ServoTest, WebViewDelegateImpl, evaluate_javascript};
-
 #[test]
 pub(super) fn test_site_state_export_and_import_cookies() {
     use servo::{SiteStateImportMode, SiteStateKind};

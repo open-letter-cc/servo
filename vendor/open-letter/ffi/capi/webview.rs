@@ -6,17 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::ffi::{CStr, c_void};
-use std::os::raw::c_char;
-use std::rc::Rc;
-use euclid::Scale;
-use servo_api::{Servo, UserContentManager, UserScript, WebView, WebViewBuilder};
-use crate::rendering_context::RenderingContext;
-use crate::webview_delegate::{
-    ResourceRequestHook, ServoResourceRequestCallback, ServoWebViewDelegate, forget_webview,
-    register_capi_webview, set_resource_request_hook,
-};
-
 /// Sets the callback that vets every resource request the `WebView` makes. See
 /// [`ServoResourceRequestCallback`] for when it is called and what its answer does.
 ///

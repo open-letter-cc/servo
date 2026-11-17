@@ -6,38 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use atomic_refcell::AtomicRefCell;
-use base64::Engine as _;
-use cssparser::Parser;
-use dom_struct::dom_struct;
-use html5ever::{LocalName, Prefix, local_name, ns};
-use js::context::{JSContext, NoGC};
-use js::rust::HandleObject;
-use layout_api::{SVG_PAINT_PROPERTIES, SVGElementData, svg_paint_values};
-use servo_url::ServoUrl;
-use style::attr::AttrValue;
-use style::parser::ParserContext;
-use style::stylesheets::Origin;
-use style::values::specified::LengthPercentage;
-use style_traits::ParsingMode;
-use uuid::Uuid;
-use xml5ever::serialize::TraversalScope;
-use crate::dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
-use crate::dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
-use crate::dom::bindings::inheritance::Castable;
-use crate::dom::bindings::root::{DomRoot, LayoutDom};
-use crate::dom::bindings::str::DOMString;
-use crate::dom::document::Document;
-use crate::dom::element::attributes::storage::AttrRef;
-use crate::dom::element::{AttributeMutation, Element};
-use crate::dom::iterators::ShadowIncluding;
-use crate::dom::node::virtualmethods::VirtualMethods;
-use crate::dom::node::{
-    ChildrenMutation, CloneChildrenFlag, Node, NodeDamage, NodeTraits, UnbindContext,
-};
-use crate::dom::svg::svggraphicselement::SVGGraphicsElement;
-use crate::dom::svg::svgimageelement::SVGImageElement;
-
 impl SVGSVGElement {
     /// One line of computed paint values, as written by
     /// [`Self::write_computed_paint_values`].

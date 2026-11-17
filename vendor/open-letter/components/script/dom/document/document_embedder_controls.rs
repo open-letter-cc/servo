@@ -6,46 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::ptr;
-use embedder_traits::{
-    ClipboardAction, ContextMenuAction, ContextMenuElementInformation,
-    ContextMenuElementInformationFlags, ContextMenuItem, ContextMenuRequest, EmbedderControlId,
-    EmbedderControlRequest, EmbedderControlResponse, EmbedderMsg,
-};
-use euclid::{Point2D, Rect, Size2D};
-use js::context::JSContext;
-use js::jsapi::JSObject;
-use js::typedarray::Uint8;
-use net_traits::CoreResourceMsg;
-use net_traits::filemanager_thread::FileManagerThreadMsg;
-use rustc_hash::FxHashMap;
-use script_bindings::cell::DomRefCell;
-use script_bindings::codegen::GenericBindings::HTMLAnchorElementBinding::HTMLAnchorElementMethods;
-use script_bindings::codegen::GenericBindings::HTMLImageElementBinding::HTMLImageElementMethods;
-use script_bindings::codegen::GenericBindings::HistoryBinding::HistoryMethods;
-use script_bindings::codegen::GenericBindings::WindowBinding::WindowMethods;
-use script_bindings::inheritance::Castable;
-use script_bindings::root::{Dom, DomRoot};
-use servo_base::Epoch;
-use servo_base::generic_channel::GenericSend;
-use servo_url::ServoUrl;
-use webrender_api::units::{DeviceIntRect, DevicePoint};
-use crate::dom::activation::Activatable;
-use crate::dom::bindings::buffer_source::create_buffer_source;
-use crate::dom::bindings::error::Error;
-use crate::dom::bindings::trace::NoTrace;
-use crate::dom::inputevent::HitTestResult;
-use crate::dom::iterators::ShadowIncluding;
-use crate::dom::links::htmlhyperlinkelementutils::HyperlinkElementTraits;
-use crate::dom::node::{Node, NodeTraits};
-use crate::dom::promise::{RootedPromise, TracedPromise};
-use crate::dom::types::{
-    Element, HTMLAnchorElement, HTMLElement, HTMLImageElement, HTMLInputElement, HTMLSelectElement,
-    Window,
-};
-use crate::messaging::MainThreadScriptMsg;
-use crate::realms::enter_auto_realm;
-
 impl DocumentEmbedderControls {
     /// Every id for one control must compare equal, since a hide or a response is matched
     /// to its control by id: the window proxy's browsing context never changes for a

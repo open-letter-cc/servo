@@ -6,18 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::panic::{self, AssertUnwindSafe};
-use servo_api::{
-    AllowOrDenyRequest, BrowsingContextId, ContextMenuAction, CreateNewWebViewRequest, Cursor,
-    DeviceIntPoint, DeviceIntSize, EmbedderControl, EmbedderControlTag, FrameEvent, FrameEventKind,
-    ImmutableOrigin, NavigationRequest, PermissionRequest, SelectElementOptionOrOptgroup,
-    UserContentManager, WebResourceLoad, WebResourceResponse, WebView, WebViewDelegate, WebViewId,
-};
-use crate::rendering_context::RenderingContext;
-
 // Adding a field here changes this number. Update it deliberately, state the
 // new size in the specification as part of the ABI contract, and append new
 // fields after the existing ones rather than reordering, so that a caller

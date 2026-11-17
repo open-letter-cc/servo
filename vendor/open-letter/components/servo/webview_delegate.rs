@@ -6,30 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::path::PathBuf;
-use std::rc::Rc;
-use embedder_traits::{
-    AlertResponse, AllowOrDeny, AuthenticationResponse, BluetoothDeviceDescription,
-    ConfirmResponse, ConsoleLogLevel, ContextMenuAction, ContextMenuElementInformation,
-    ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlResponse, FilePickerRequest,
-    FilterPattern, InputEventId, InputEventResult, InputMethodType, LoadStatus, MediaSessionEvent,
-    NewWebViewDetails, Notification, PermissionFeature, PromptResponse, RgbColor, ScreenGeometry,
-    SelectElementOptionOrOptgroup, SelectElementRequest, SimpleDialogRequest, TraversalId,
-    WebResourceRequest, WebResourceResponse, WebResourceResponseMsg,
-};
-use paint_api::rendering_context::RenderingContext;
-use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
-use servo_base::id::{BrowsingContextId, PipelineId};
-use servo_constellation_traits::EmbedderToConstellationMessage;
-use servo_url::ImmutableOrigin;
-use tokio::sync::mpsc::UnboundedSender as TokioSender;
-use tokio::sync::oneshot::Sender;
-use url::Url;
-use webrender_api::units::{DeviceIntPoint, DeviceIntRect, DeviceIntSize};
-use crate::proxies::ConstellationProxy;
-use crate::responders::{AutomaticResponder, OneshotSender, ServoErrorSender};
-use crate::{RegisterOrUnregister, Servo, WebView, WebViewBuilder};
-
 impl PermissionRequest {
     /// Get the origin of the global that requested the permission. This is supplied by
     /// the engine, and is the origin of a nested frame when one is the requester, which

@@ -6,13 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::collections::HashMap;
-use std::num::NonZeroU64;
-use std::time::Duration as StdDuration;
-use base64::Engine;
-use net::hsts::{HstsEntry, HstsList, HstsPreloadList};
-use net_traits::IncludeSubdomains;
-
 #[test]
 pub(super) fn test_hsts_list_merge_keeps_the_later_expiry() {
     let entry = |host: &str, expires_at: Option<u64>| HstsEntry {

@@ -6,21 +6,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::net::IpAddr;
-use std::time::SystemTime;
-use cookie::Cookie;
-use itertools::Itertools;
-use log::info;
-use malloc_size_of_derive::MallocSizeOf;
-use net_traits::pub_domains::reg_suffix;
-use net_traits::{CookieSource, SiteDescriptor};
-use serde::{Deserialize, Serialize};
-use servo_url::ServoUrl;
-use crate::cookie::ServoCookie;
-
 impl CookieStorage {
     /// Add the cookies of `other`. A cookie with the same name, domain and path as one
     /// held replaces it only if it was accessed more recently. Expired cookies are
