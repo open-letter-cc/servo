@@ -55,7 +55,7 @@ multiprocess = ["servo/multiprocess"]
 dpi = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
-servo = { workspace = true, features = ["js_jit", "baked-in-resources", "bundled_freetype"] }
+servo = { workspace = true, features = ["aws-lc-rs", "js_jit", "baked-in-resources", "bundled_freetype", "harfrust"] }
 url = { workspace = true }
 
 # Needed by `servo_rendering_context_create_native` and friends, which the
