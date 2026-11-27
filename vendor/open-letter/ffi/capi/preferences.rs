@@ -129,6 +129,14 @@ pub unsafe extern "C" fn servo_preferences_set_layout_threads(
     }
     // SAFETY: The caller is assumed to uphold the safety requirements
     // for `preferences` documented above.
-    unsafe { &mut *preferences }.layout_threads = value;
+    // The preference is unsigned upstream; -1 is this call's own word for "three
+    // quarters of the logical cores, at most 6", resolved here.
+    let threads = match value {
+        -1 => std::thread::available_parallelism()
+            .map(|cores| (cores.get() * 3 / 4).clamp(1, 6))
+            .unwrap_or(1) as u64,
+        value => value as u64,
+    };
+    unsafe { &mut *preferences }.layout_threads = threads;
     0
 }

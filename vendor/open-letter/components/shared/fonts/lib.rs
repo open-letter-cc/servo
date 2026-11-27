@@ -6,12 +6,5 @@
 #[allow(unused_imports)]
 use super::*;
 
-impl std::fmt::Debug for FontDataAndIndex {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("FontDataAndIndex")
-            .field("len", &self.data.as_ref().len())
-            .field("index", &self.index)
-            .finish()
-    }
-}
+// FontDataAndIndex's Debug is upstream's own derive since the carry onto
+// upstream main; ours, which printed the length in place of the bytes, is dropped.

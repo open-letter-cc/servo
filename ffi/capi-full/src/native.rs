@@ -824,6 +824,9 @@ unsafe fn input_event_of(event: ServoInputEvent) -> Option<InputEvent> {
                     mode,
                 },
                 point,
+                // A wheel event carries no modifiers in this ABI, so upstream's
+                // Shift rotation of a vertical scroll is not applied here.
+                Modifiers::empty(),
             )))
         },
         // SAFETY: the caller is assumed to uphold the requirements documented

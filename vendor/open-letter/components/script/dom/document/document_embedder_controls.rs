@@ -31,7 +31,10 @@ impl DocumentEmbedderControls {
         self.send_embedder_control_request(
             EmbedderControlRequest::PageRequest(bytes),
             id,
-            DeviceIntRect::zero(),
+            PipelineRect {
+                rect: Rect::zero(),
+                pipeline_id: self.window.pipeline_id(),
+            },
         );
     }
 
