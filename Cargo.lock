@@ -4612,9 +4612,7 @@ dependencies = [
 
 [[package]]
 name = "ipc-channel"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf1d9c442a2ec790209da8a49f99f7dae0fad31ba24c9947b01ce5e8de8bddcb"
+version = "0.23.0"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -8450,12 +8448,32 @@ dependencies = [
 name = "servo-capi"
 version = "0.8.0"
 dependencies = [
+ "arboard",
  "dpi",
  "euclid",
  "libc",
  "log",
  "servo",
  "url",
+]
+
+[[package]]
+name = "servo-capi-full"
+version = "0.8.0"
+dependencies = [
+ "arboard",
+ "dpi",
+ "euclid",
+ "gleam",
+ "glow",
+ "libc",
+ "log",
+ "raw-window-handle",
+ "servo",
+ "surfman",
+ "url",
+ "winapi",
+ "wio",
 ]
 
 [[package]]
@@ -9251,6 +9269,7 @@ dependencies = [
  "sea-query",
  "sea-query-rusqlite",
  "serde",
+ "serde_json",
  "servo-base",
  "servo-config",
  "servo-default-resources",
@@ -9270,7 +9289,6 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "smallvec",
- "tempfile",
  "time",
  "tokio",
  "tokio-rustls",
@@ -10613,8 +10631,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surfman"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe194717def845ecb64e7aeda3e2108c4b3b1584a01aa6e545e702cedca2a00"
 dependencies = [
  "bitflags 2.13.2",
  "cfg_aliases",

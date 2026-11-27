@@ -671,3 +671,8 @@ fn test_expired_cookie_does_not_evict_cookie_when_storage_is_full() {
         Some("extra1=bar; extra2=bar; extra3=bar; extra4=bar; extra5=bar")
     );
 }
+
+#[path = "../../../vendor/open-letter/components/net/tests/cookie.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

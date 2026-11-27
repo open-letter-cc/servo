@@ -9,8 +9,9 @@ use std::thread;
 
 use app_units::Au;
 use fonts_traits::{
-    FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef, LowercaseFontFamilyName,
-    SystemFontServiceMessage, SystemFontServiceProxySender,
+    FontData, FontDataAndIndex, FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef,
+    LocalFontIdentifier, LowercaseFontFamilyName, SystemFontServiceMessage,
+    SystemFontServiceProxySender,
 };
 use malloc_size_of::MallocSizeOf as MallocSizeOfTrait;
 use malloc_size_of_derive::MallocSizeOf;
@@ -79,6 +80,11 @@ pub struct SystemFontService {
     /// instance key for the instance. Once the free keys are exhausted, the
     /// [`SystemFontService`] will fetch a new batch.
     free_font_instance_keys: FxHashMap<PainterId, Vec<FontInstanceKey>>,
+
+    /// The bytes of local fonts that content processes have asked for, as shared
+    /// memory, so that a font is read from disk once and every process receives the
+    /// same segment. `None` records a font that could not be read.
+    local_font_data: HashMap<LocalFontIdentifier, Option<FontDataAndIndex>>,
 }
 
 impl SystemFontService {
@@ -101,6 +107,7 @@ impl SystemFontService {
                     generic_fonts: Default::default(),
                     free_font_keys: Default::default(),
                     free_font_instance_keys: Default::default(),
+                    local_font_data: Default::default(),
                 };
 
                 cache.refresh_local_families();
@@ -167,6 +174,9 @@ impl SystemFontService {
                 },
                 SystemFontServiceMessage::PrefetchFontKeys(painter_id) => {
                     self.fetch_font_keys_if_needed(painter_id);
+                },
+                SystemFontServiceMessage::GetFontData(identifier, result_sender) => {
+                    let _ = result_sender.send(self.get_local_font_data(identifier));
                 },
                 SystemFontServiceMessage::CollectMemoryReport(report_sender) => {
                     self.collect_memory_report(report_sender);
@@ -357,3 +367,8 @@ impl SystemFontService {
             .clone()
     }
 }
+
+#[path = "../../vendor/open-letter/components/fonts/system_font_service.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -66,7 +66,9 @@ use crate::dom::workerglobalscope::{
 use crate::fetch::fetch::{CspViolationsProcessor, load_whole_resource};
 use crate::messaging::{CommonScriptMsg, ScriptEventLoopSender};
 use crate::realms::enter_auto_realm;
-use crate::runtime::script_runtime::{IntroductionType, Runtime, ThreadSafeJSContext};
+use crate::runtime::script_runtime::{
+    IntroductionType, JSThreadKind, Runtime, ThreadSafeJSContext, set_js_thread_stack_size,
+};
 use crate::scripting::fetching_options::ScriptFetchOptions;
 use crate::scripting::script_execution::{RethrowErrors, ScriptOptions};
 use crate::tasks::task_queue::{QueuedTask, QueuedTaskConversion, TaskQueue};
@@ -342,9 +344,12 @@ impl ServiceWorkerGlobalScope {
 
         let serialized_worker_url = script_url.to_string();
         let origin = scope_url.origin();
+        let stack_size = JSThreadKind::Worker.stack_size();
         thread::Builder::new()
             .name(format!("SW:{}", script_url.debug_compact()))
+            .stack_size(stack_size)
             .spawn(move || {
+                set_js_thread_stack_size(stack_size);
                 thread_state::initialize(ThreadState::SCRIPT | ThreadState::IN_WORKER);
                 let runtime = Runtime::new(None);
                 // SAFETY: We are in a new thread, so this first cx.

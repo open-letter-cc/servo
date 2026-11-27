@@ -76,7 +76,7 @@ use style::dom::OpaqueNode;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::logical_geometry::WritingMode;
 use style::properties::style_structs::Font;
-use style::properties::{ComputedValues, PropertyId};
+use style::properties::{ComputedValues, LonghandId, PropertyDeclarationId, PropertyId};
 use style::selector_parser::{PseudoElement, RestyleDamage, Snapshot};
 use style::stylesheets::{DocumentStyleSheet, Stylesheet};
 use style::stylist::Stylist;
@@ -662,6 +662,10 @@ pub struct ReflowResult {
     /// This is needed to support inline SVGs as the serialization needs to happen on
     /// the script thread.
     pub pending_svg_elements_for_serialization: Vec<UntrustedNodeAddress>,
+    /// The outermost inline `SVGSVGElement`s with a descendant (or themselves) whose
+    /// [`SVG_PAINT_PROPERTIES`] changed in this reflow's restyle, so that script can
+    /// serialize them again.
+    pub restyled_svg_elements: Vec<UntrustedNodeAddress>,
     /// The list of iframes in this layout and their sizes, used in order
     /// to communicate them with the Constellation and also the `Window`
     /// element of their content pages. Returning None if incremental reflow
@@ -1171,3 +1175,8 @@ mod test {
         assert_eq!(image_animation_state.active_frame, 1);
     }
 }
+
+#[path = "../../../vendor/open-letter/components/shared/layout/lib.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

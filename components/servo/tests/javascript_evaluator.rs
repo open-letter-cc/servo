@@ -129,3 +129,8 @@ fn runs_in_csp_restricted() {
     let result = evaluate_javascript(&servo_test, webview.clone(), "document.readyState");
     assert_eq!(result, Ok(JSValue::String("complete".into())));
 }
+
+#[path = "../../../vendor/open-letter/components/servo/tests/javascript_evaluator.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

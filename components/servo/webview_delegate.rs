@@ -16,8 +16,9 @@ use embedder_traits::{
 };
 use paint_api::rendering_context::RenderingContext;
 use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
-use servo_base::id::PipelineId;
+use servo_base::id::{BrowsingContextId, PipelineId};
 use servo_constellation_traits::EmbedderToConstellationMessage;
+use servo_url::ImmutableOrigin;
 use tokio::sync::mpsc::UnboundedSender as TokioSender;
 use tokio::sync::oneshot::Sender;
 use url::Url;
@@ -75,6 +76,8 @@ impl Drop for NavigationRequest {
 /// interface.
 pub struct PermissionRequest {
     pub(crate) requested_feature: PermissionFeature,
+    pub(crate) requester_origin: ImmutableOrigin,
+    pub(crate) requester_browsing_context_id: Option<BrowsingContextId>,
     pub(crate) allow_deny_request: AllowOrDenyRequest,
 }
 
@@ -326,8 +329,8 @@ impl InterceptedWebResourceLoad {
 
 impl Drop for InterceptedWebResourceLoad {
     fn drop(&mut self) {
-        if !self.finished &&
-            let Err(error) = self
+        if !self.finished
+            && let Err(error) = self
                 .response_sender
                 .send(WebResourceResponseMsg::FinishLoad)
         {
@@ -356,6 +359,11 @@ pub enum EmbedderControl {
     /// The menu that is actually shown the user may be customized, but custom menu entries
     /// must be handled by the embedder.
     ContextMenu(ContextMenu),
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// Opaque bytes that page script asked to have delivered to the embedder, answered with
+    /// opaque bytes. See [`PageRequest`].
+    PageRequest(PageRequest),
 }
 
 impl EmbedderControl {
@@ -368,6 +376,7 @@ impl EmbedderControl {
             EmbedderControl::InputMethod(input_method) => input_method.id,
             EmbedderControl::SimpleDialog(simple_dialog) => simple_dialog.id(),
             EmbedderControl::ContextMenu(context_menu) => context_menu.id,
+            EmbedderControl::PageRequest(page_request) => page_request.id,
         }
     }
 }
@@ -1056,6 +1065,50 @@ pub trait WebViewDelegate {
     /// into page content, such as dropdowns for `<select>` elements.
     fn show_embedder_control(&self, _webview: WebView, _embedder_control: EmbedderControl) {}
 
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// A bitmask of `EMBEDDER_CONTROL_*` bits naming the [`EmbedderControlTag`]s this
+    /// embedder wants routed to [`WebViewDelegate::handle_embedder_control`] instead of
+    /// [`WebViewDelegate::show_embedder_control`]. The default,
+    /// [`EMBEDDER_CONTROL_NONE`], keeps Servo's behaviour unchanged for every control.
+    fn embedder_control_flags(&self) -> u64 {
+        EMBEDDER_CONTROL_NONE
+    }
+
+    /// Generic embedder control extension, no domain logic.
+    ///
+    /// Called instead of [`WebViewDelegate::show_embedder_control`] when the control's
+    /// [`EmbedderControlTag`] bit is set in [`WebViewDelegate::embedder_control_flags`].
+    ///
+    /// Return `None` to report the control as handled: the embedder has taken
+    /// responsibility for it, and Servo does nothing further. Return
+    /// `Some(embedder_control)` to decline it, which hands it back to Servo to follow the
+    /// ordinary [`WebViewDelegate::show_embedder_control`] path.
+    ///
+    /// Note that a control reported as handled is dropped by Servo, and dropping a control
+    /// sends its default response (a dismissal, or the current selection). An embedder that
+    /// takes over a control's *user interface* should therefore decline it here and drive
+    /// the typed control from `show_embedder_control` instead; reporting it as handled is
+    /// for embedders that want the control suppressed.
+    ///
+    /// `requester_origin` is the origin of the document that asked for the control, which
+    /// for a nested frame is the frame's, not the top-level document's. Supplied by the
+    /// engine; the page cannot assert it. `None` for a control with no
+    /// [`EmbedderControl::tag`], which is never offered here.
+    fn handle_embedder_control(
+        &self,
+        _webview: WebView,
+        embedder_control: EmbedderControl,
+        _requester_origin: Option<&ImmutableOrigin>,
+    ) -> Option<EmbedderControl> {
+        Some(embedder_control)
+    }
+
+    /// Called when a frame in this [`WebView`] is created, has a new document become
+    /// active in it, or is removed, so that the embedder can keep its own record of the
+    /// frame tree. See [`FrameEvent`].
+    fn notify_frame_changed(&self, _webview: WebView, _event: FrameEvent) {}
+
     /// Request that the embedder hide and ignore a previous [`EmbedderControl`] request, if it hasn’t
     /// already responded to it.
     ///
@@ -1305,3 +1358,8 @@ mod test {
         assert!(errors.try_recv().is_none());
     }
 }
+
+#[path = "../../vendor/open-letter/components/servo/webview_delegate.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

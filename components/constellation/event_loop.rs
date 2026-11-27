@@ -36,6 +36,9 @@ pub struct EventLoop {
     /// on the other side of the process boundary. When running in the same process, the
     /// BackgroundHangMonitor is shared among all [`EventLoop`]s so this will be `None`.
     background_hang_monitor_sender: Option<GenericSender<BackgroundHangMonitorControlMsg>>,
+    /// The operating-system id of the content process this event loop runs in, or
+    /// `None` when it runs on a thread of this process.
+    process_id: Option<u32>,
     dont_send_or_sync: PhantomData<Rc<()>>,
 }
 
@@ -139,6 +142,7 @@ impl EventLoop {
             script_chan,
             id,
             background_hang_monitor_sender: None,
+            process_id: None,
             dont_send_or_sync: PhantomData,
         }
     }
@@ -168,6 +172,7 @@ impl EventLoop {
             }),
         )?;
 
+        let process_id = Some(process.pid());
         let crossbeam_receiver = lifeline_receiver.route_preserving_errors();
         constellation
             .process_manager
@@ -177,6 +182,7 @@ impl EventLoop {
             script_chan,
             id,
             background_hang_monitor_sender: Some(background_hand_monitor_sender),
+            process_id,
             dont_send_or_sync: PhantomData,
         })
     }
@@ -217,3 +223,8 @@ pub struct NewScriptEventLoopProcessInfo {
     /// The broken image icon data that is used to create an image to show in place of broken images.
     pub broken_image_icon_data: ResourceBytes,
 }
+
+#[path = "../../vendor/open-letter/components/constellation/event_loop.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

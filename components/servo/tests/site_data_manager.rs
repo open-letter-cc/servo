@@ -766,3 +766,8 @@ fn test_get_cookie_async() {
     assert_eq!(cookies[0].name(), "foo");
     assert_eq!(cookies[0].value(), "bar");
 }
+
+#[path = "../../../vendor/open-letter/components/servo/tests/site_data_manager.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

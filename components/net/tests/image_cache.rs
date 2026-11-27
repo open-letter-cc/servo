@@ -788,3 +788,8 @@ fn test_svg_rasterize_zero_size_fallback() {
         RasterizationResult::InvalidSvgParameters
     ));
 }
+
+#[path = "../../../vendor/open-letter/components/net/tests/image_cache.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

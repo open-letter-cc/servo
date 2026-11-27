@@ -2,9 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use servo_api::SoftwareRenderingContext;
+use servo_api::{DeviceIntRect, RgbaImage, SoftwareRenderingContext};
 
 /// An opaque struct that abstracts a rendering context used
 /// for managing an OpenGL or GLES rendering context.
@@ -21,9 +22,17 @@ use servo_api::SoftwareRenderingContext;
 // cbindgen:opaque
 pub struct RenderingContext {
     pub(crate) inner: Rc<dyn servo_api::RenderingContext>,
+    /// The last presented frame, kept for [`servo_rendering_context_read_frame`].
+    /// Shared by every handle to the same context (see
+    /// `servo_rendering_context_clone`), since a present through any of them
+    /// presents the one surface.
+    pub(crate) frames: Rc<FrameCapture>,
 }
 
 /// Creates a new software rendering context for headless rendering.
+///
+/// Its frames are read with [`servo_rendering_context_read_frame`] after each
+/// `servo_rendering_context_present`.
 ///
 /// Returns a newly allocated `RenderingContext` handle, or `NULL` on
 /// failure.
@@ -37,9 +46,7 @@ pub extern "C" fn servo_rendering_context_create_software(
 ) -> *mut RenderingContext {
     let size = dpi::PhysicalSize::new(width, height);
     match SoftwareRenderingContext::new(size) {
-        Ok(context) => Box::into_raw(Box::new(RenderingContext {
-            inner: Rc::new(context),
-        })),
+        Ok(context) => Box::into_raw(Box::new(RenderingContext::new(Rc::new(context), true))),
         Err(error) => {
             log::error!("Failed to create SoftwareRenderingContext: {error:?}");
             std::ptr::null_mut()
@@ -70,3 +77,8 @@ pub unsafe extern "C" fn servo_rendering_context_free(context: *mut RenderingCon
         let _ = Box::from_raw(context);
     }
 }
+
+#[path = "../../vendor/open-letter/ffi/capi/rendering_context.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -64,12 +64,22 @@ where
     let path = config_dir.join(filename);
     let display = path.display();
 
-    let mut file = match File::create(&path) {
-        Err(why) => panic!("couldn't create {}: {}", display, why),
-        Ok(file) => file,
-    };
-    let mut writer = BufWriter::new(&mut file);
-    serde_json::to_writer_pretty(&mut writer, data).expect("Could not serialize to file");
+    // Write a temporary file and rename it over the old one, so that a reader (another
+    // engine starting on the same config directory) never sees a truncated file.
+    let temporary_path = config_dir.join(format!("{filename}.{}.tmp", std::process::id()));
+    {
+        let mut file = match File::create(&temporary_path) {
+            Err(why) => panic!("couldn't create {}: {}", temporary_path.display(), why),
+            Ok(file) => file,
+        };
+        let mut writer = BufWriter::new(&mut file);
+        serde_json::to_writer_pretty(&mut writer, data).expect("Could not serialize to file");
+        std::io::Write::flush(&mut writer).expect("Could not write to file");
+    }
+    if let Err(why) = std::fs::rename(&temporary_path, &path) {
+        let _ = std::fs::remove_file(&temporary_path);
+        panic!("couldn't replace {}: {}", display, why);
+    }
     trace!("successfully wrote to {display}");
 }
 

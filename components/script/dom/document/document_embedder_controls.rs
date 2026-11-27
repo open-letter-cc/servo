@@ -5,6 +5,7 @@
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
 use std::cell::Cell;
+use std::ptr;
 
 use app_units::Au;
 use embedder_traits::{
@@ -14,6 +15,8 @@ use embedder_traits::{
 };
 use euclid::{Point2D, Rect, Size2D};
 use js::context::JSContext;
+use js::jsapi::JSObject;
+use js::typedarray::Uint8;
 use net_traits::CoreResourceMsg;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
 use rustc_hash::FxHashMap;
@@ -30,16 +33,20 @@ use servo_url::ServoUrl;
 use style_traits::CSSPixel;
 
 use crate::dom::activation::Activatable;
+use crate::dom::bindings::buffer_source::create_buffer_source;
+use crate::dom::bindings::error::Error;
 use crate::dom::bindings::trace::NoTrace;
 use crate::dom::inputevent::HitTestResult;
 use crate::dom::iterators::ShadowIncluding;
 use crate::dom::links::htmlhyperlinkelementutils::HyperlinkElementTraits;
 use crate::dom::node::{Node, NodeTraits};
+use crate::dom::promise::{RootedPromise, TracedPromise};
 use crate::dom::types::{
     Element, HTMLAnchorElement, HTMLElement, HTMLImageElement, HTMLInputElement, HTMLSelectElement,
     Window,
 };
 use crate::messaging::MainThreadScriptMsg;
+use crate::realms::enter_auto_realm;
 
 #[derive(JSTraceable, MallocSizeOf)]
 #[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
@@ -76,6 +83,9 @@ pub(crate) struct DocumentEmbedderControls {
     user_interface_element_index: Cell<Epoch>,
     /// A map of visible user interface elements.
     visible_elements: DomRefCell<FxHashMap<NoTrace<Epoch>, ControlElement>>,
+    /// Promises returned by `EmbedderRequest.send()` that are waiting for the embedder's
+    /// answer, keyed like `visible_elements`.
+    pending_page_requests: DomRefCell<FxHashMap<NoTrace<Epoch>, TracedPromise>>,
 }
 
 impl DocumentEmbedderControls {
@@ -84,6 +94,7 @@ impl DocumentEmbedderControls {
             window: Dom::from_ref(window),
             user_interface_element_index: Default::default(),
             visible_elements: Default::default(),
+            pending_page_requests: Default::default(),
         }
     }
 
@@ -92,11 +103,7 @@ impl DocumentEmbedderControls {
     pub(crate) fn next_control_id(&self) -> EmbedderControlId {
         let index = self.user_interface_element_index.get();
         self.user_interface_element_index.set(index.next());
-        EmbedderControlId {
-            webview_id: self.window.webview_id(),
-            pipeline_id: self.window.pipeline_id(),
-            index,
-        }
+        self.control_id(index)
     }
 
     #[cfg_attr(crown, expect(crown::unrooted_must_root))]
@@ -140,9 +147,12 @@ impl DocumentEmbedderControls {
             EmbedderControlRequest::SelectElement(..) |
             EmbedderControlRequest::ColorPicker(..) |
             EmbedderControlRequest::InputMethod(..) |
-            EmbedderControlRequest::ContextMenu(..) => self
-                .window
-                .send_to_embedder(EmbedderMsg::ShowEmbedderControl(id, rect, request)),
+            EmbedderControlRequest::ContextMenu(..) |
+            EmbedderControlRequest::PageRequest(..) => {
+                let origin = self.window.as_global_scope().origin().immutable().clone();
+                self.window
+                    .send_to_embedder(EmbedderMsg::ShowEmbedderControl(id, rect, request, origin))
+            },
             EmbedderControlRequest::FilePicker(file_picker_request) => {
                 let main_thread_sender = self.window.main_thread_script_chan().clone();
                 let callback =
@@ -192,11 +202,7 @@ impl DocumentEmbedderControls {
                 if callback(control_element) {
                     return true;
                 }
-                let id = EmbedderControlId {
-                    webview_id: self.window.webview_id(),
-                    pipeline_id: self.window.pipeline_id(),
-                    index: index.0,
-                };
+                let id = self.control_id(index.0);
                 self.window
                     .send_to_embedder(EmbedderMsg::HideEmbedderControl(id));
                 false
@@ -211,6 +217,11 @@ impl DocumentEmbedderControls {
     ) {
         assert_eq!(self.window.pipeline_id(), id.pipeline_id);
         assert_eq!(self.window.webview_id(), id.webview_id);
+
+        if let EmbedderControlResponse::PageRequest(response) = response {
+            self.handle_page_request_response(cx, id, response);
+            return;
+        }
 
         rooted!(&in(cx) let visible_element = self.visible_elements.borrow_mut().remove(&id.index.into()));
 
@@ -259,11 +270,7 @@ impl DocumentEmbedderControls {
             let mut visible_elements = self.visible_elements.borrow_mut();
             visible_elements.retain(|index, control_element| {
                 if matches!(control_element, ControlElement::ContextMenu(..)) {
-                    let id = EmbedderControlId {
-                        webview_id: self.window.webview_id(),
-                        pipeline_id: self.window.pipeline_id(),
-                        index: index.0,
-                    };
+                    let id = self.control_id(index.0);
                     self.window
                         .send_to_embedder(EmbedderMsg::HideEmbedderControl(id));
                     false
@@ -505,3 +512,8 @@ impl ContextMenuNodes {
         }
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/document/document_embedder_controls.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

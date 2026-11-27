@@ -19,7 +19,10 @@ use webrender_api::{
 };
 
 use crate::font_context::FontCacheKey;
-use crate::{FontDescriptor, FontIdentifier, FontRef, FontTemplateRef, SkrifaFont};
+use crate::{
+    FontDataAndIndex, FontDescriptor, FontIdentifier, FontRef, FontTemplateRef, LocalFontIdentifier,
+    SkrifaFont,
+};
 
 const SYSTEM_FONT_CACHE_CAPACITY: usize = 256;
 
@@ -72,6 +75,9 @@ pub struct SystemFontServiceProxy {
     templates: RwLock<HashMap<FontTemplateCacheKey, Vec<FontTemplateRef>>>,
     system_font_cache: Mutex<LruCache<FontCacheKey, Option<FontRef>>>,
     skrifa_fonts: RwLock<HashMap<FontIdentifier, SkrifaFontCacheEntry>>,
+    /// Bytes of local fonts fetched from the [`SystemFontService`], kept for the life
+    /// of the process so that each font is requested, and mapped, once.
+    local_font_data: RwLock<HashMap<LocalFontIdentifier, Option<FontDataAndIndex>>>,
 }
 
 impl SystemFontServiceProxy {
@@ -81,6 +87,7 @@ impl SystemFontServiceProxy {
             templates: Default::default(),
             system_font_cache: Mutex::new(LruCache::new(SYSTEM_FONT_CACHE_CAPACITY)),
             skrifa_fonts: Default::default(),
+            local_font_data: Default::default(),
         }
         .into()
     }
@@ -243,3 +250,6 @@ impl SystemFontServiceProxy {
         &self.system_font_cache
     }
 }
+
+#[path = "../../vendor/open-letter/components/fonts/system_font_service_proxy.rs"]
+mod open_letter;

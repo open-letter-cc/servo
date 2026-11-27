@@ -12,7 +12,8 @@ use accesskit::{
 };
 use dpi::PhysicalSize;
 use embedder_traits::{
-    ContextMenuAction, ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlRequest, Image,
+    ContextMenuAction, ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlRequest,
+    EmbedderMsg, Image,
     InputEvent, InputEventAndId, InputEventId, JSValue, JavaScriptEvaluationError, LoadStatus,
     MediaSessionActionType, NewWebViewDetails, ScreenGeometry, ScreenshotCaptureError, Scroll,
     Theme, TraversalId, UrlRequest, ViewportDetails, WebViewPoint, WebViewRect,
@@ -31,7 +32,7 @@ use servo_constellation_traits::{
     TraversalDirection,
 };
 use servo_geometry::DeviceIndependentPixel;
-use servo_url::ServoUrl;
+use servo_url::{ImmutableOrigin, ServoUrl};
 use style_traits::CSSPixel;
 use url::Url;
 use webrender_api::units::{DeviceIntRect, DevicePixel, DevicePoint, DeviceSize};
@@ -44,8 +45,8 @@ use crate::responders::AutomaticResponder;
 use crate::servo::PendingHandledInputEvent;
 use crate::webview_delegate::{CreateNewWebViewRequest, DefaultWebViewDelegate, WebViewDelegate};
 use crate::{
-    ColorPicker, ContextMenu, EmbedderControl, InputMethodControl, SelectElement, Servo,
-    UserContentManager, WebRenderDebugOption,
+    ColorPicker, ContextMenu, EmbedderControl, InputMethodControl, PageRequest, SelectElement,
+    Servo, UserContentManager, WebRenderDebugOption,
 };
 
 pub(crate) const MINIMUM_WEBVIEW_SIZE: Size2D<i32, DevicePixel> = Size2D::new(1, 1);
@@ -219,6 +220,20 @@ impl WebView {
             viewport_details,
             user_content_manager_id,
         };
+
+        // Announce the top-level frame on the channel its script will later use, before the
+        // constellation or the opener learns of the WebView below, so that the embedder
+        // hears of the frame before anything else about it.
+        let initial_url = builder
+            .url
+            .clone()
+            .unwrap_or_else(|| Url::parse("about:blank").expect("'about:blank' parses"));
+        servo.embedder_proxy().send(EmbedderMsg::FrameCreated(
+            id,
+            id.into(),
+            None,
+            initial_url.into(),
+        ));
 
         // There are two possibilities here. Either the WebView is a new toplevel
         // WebView in which case `Self::create_new_webview_responder` is `None` or this
@@ -812,6 +827,7 @@ impl WebView {
         control_id: EmbedderControlId,
         position: DeviceIntRect,
         embedder_control_request: EmbedderControlRequest,
+        requester_origin: ImmutableOrigin,
     ) {
         let constellation_proxy = self.servo().constellation_proxy().clone();
         let embedder_control = match embedder_control_request {
@@ -876,13 +892,20 @@ impl WebView {
                     response_sent: false,
                 })
             },
+            EmbedderControlRequest::PageRequest(bytes) => {
+                EmbedderControl::PageRequest(PageRequest {
+                    id: control_id,
+                    bytes,
+                    response_sent: false,
+                    constellation_proxy,
+                })
+            },
             EmbedderControlRequest::FilePicker { .. } => {
                 unreachable!("This message should be routed through the FileManagerThread")
             },
         };
 
-        self.delegate()
-            .show_embedder_control(self.clone(), embedder_control);
+        self.dispatch_embedder_control(embedder_control, Some(&requester_origin));
     }
 
     /// AccessKit subtree id for this [`WebView`], if accessibility is active.
@@ -1226,3 +1249,8 @@ impl WebViewBuilder {
         WebView::new(self)
     }
 }
+
+#[path = "../../vendor/open-letter/components/servo/webview.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

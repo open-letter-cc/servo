@@ -43,8 +43,8 @@ use js::rust::wrappers2::{
     CollectServoSizes, ContextOptionsRef, DispatchableRun, InitConsumeStreamCallback,
     JS_AddExtraGCRootsTracer, JS_GetPromiseResult, JS_InitDestroyPrincipalsCallback,
     JS_InitReadPrincipalsCallback, JS_NewStringCopyUTF8N, JS_SetGCCallback, JS_SetGCParameter,
-    JS_SetGlobalJitCompilerOption, JS_SetOffthreadIonCompilationEnabled, JS_SetSecurityCallbacks,
-    SetDOMCallbacks, SetGCSliceCallback, SetPreserveWrapperCallbacks,
+    JS_SetGlobalJitCompilerOption, JS_SetNativeStackQuota, JS_SetOffthreadIonCompilationEnabled,
+    JS_SetSecurityCallbacks, SetDOMCallbacks, SetGCSliceCallback, SetPreserveWrapperCallbacks,
     SetPromiseRejectionTrackerCallback, SetUpEventLoopDispatch,
 };
 use js::rust::{
@@ -554,6 +554,12 @@ pub(crate) struct Runtime {
     runtime_callback_data: Box<RuntimeCallbackData>,
 }
 
+thread_local! {
+    /// The stack size this thread was spawned with, if it is a JavaScript thread spawned
+    /// through [`JSThreadKind::stack_size`]. Read when its runtime is created.
+    static JS_THREAD_STACK_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
 impl Runtime {
     /// Create a new runtime, optionally with the given [`SendableTaskSource`] for networking.
     ///
@@ -600,6 +606,20 @@ impl Runtime {
             RustRuntime::new(current_js_engine_handle())
         };
         let cx = runtime.cx();
+
+        // Let script use only part of this thread's stack, so that deep recursion throws
+        // a catchable "too much recursion" error well before the thread overflows.
+        if let Some(stack_size) = JS_THREAD_STACK_SIZE.get() {
+            let quota = native_stack_quota(stack_size);
+            unsafe {
+                JS_SetNativeStackQuota(
+                    cx,
+                    quota,
+                    quota - SYSTEM_CODE_STACK_BUFFER,
+                    quota - SYSTEM_CODE_STACK_BUFFER - TRUSTED_SCRIPT_STACK_BUFFER,
+                );
+            }
+        }
 
         let have_event_loop_sender = script_event_loop_sender.is_some();
         let runtime_callback_data = Box::new(RuntimeCallbackData {
@@ -1506,3 +1526,8 @@ impl IntroductionType {
     pub const WORKER: &CStr = c"Worker";
     pub const WORKER_STR: &str = "Worker";
 }
+
+#[path = "../../../vendor/open-letter/components/script/runtime/script_runtime.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -13,7 +13,9 @@ use webrender_api::{
     FontInstanceFlags, FontInstanceKey, FontInstancePlatformOptions, FontKey, FontVariation,
 };
 
-use crate::{FontDescriptor, FontIdentifier, FontTemplate};
+use crate::{
+    FontDataAndIndex, FontDescriptor, FontIdentifier, FontTemplate, LocalFontIdentifier,
+};
 
 /// Commands that the `FontContext` sends to the `SystemFontService`.
 #[derive(Debug, Deserialize, MallocSizeOf, Serialize)]
@@ -33,6 +35,11 @@ pub enum SystemFontServiceMessage {
         GenericSender<FontInstanceKey>,
     ),
     PrefetchFontKeys(PainterId),
+    /// Ask for the bytes of a local (system) font, so that a process which cannot open
+    /// font files itself can still instantiate the font. The reply is `None` if the
+    /// font cannot be read. The data is shared memory: one segment per font, mapped
+    /// once in each process that asks for it.
+    GetFontData(LocalFontIdentifier, GenericSender<Option<FontDataAndIndex>>),
     GetFontKey(PainterId, GenericSender<FontKey>),
     GetFontInstanceKey(PainterId, GenericSender<FontInstanceKey>),
     CollectMemoryReport(ReportsChan),

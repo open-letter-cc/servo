@@ -1260,7 +1260,7 @@ where
                 self.handle_request_from_background_hang_monitor(message);
             },
             #[cfg(feature = "multiprocess")]
-            Request::RemoveProcess(index) => self.process_manager.remove(index),
+            Request::RemoveProcess(index) => self.handle_process_exited(index),
             #[cfg(not(feature = "multiprocess"))]
             Request::RemoveProcess(_) => {},
         }
@@ -4979,6 +4979,8 @@ where
             };
 
         self.unload_document(old_pipeline_id);
+        // Back or forward to a document still loaded in the frame.
+        self.notify_frame_navigated(browsing_context_id, new_pipeline_id);
 
         if let Some(new_pipeline) = self.pipelines.get_mut(&new_pipeline_id) {
             #[cfg(feature = "devtools")]
@@ -5554,6 +5556,28 @@ where
                 pipeline.send_throttle_messages(hidden);
             }
         }
+
+        // Every `ScriptThread` keeps one `WebViewState` per `WebView`, shared by all of
+        // the `WebView`'s documents in that thread, so updating it reaches nested
+        // documents in other event loops too, and documents created after this point
+        // start with the new visibility state.
+        let Some(state) = self
+            .webviews
+            .get(&webview_id)
+            .map(|webview| webview.state())
+        else {
+            return;
+        };
+        for event_loop in self.event_loops() {
+            if let Err(error) =
+                event_loop.send(ScriptThreadMessage::UpdateWebViewState(state.clone()))
+            {
+                warn!(
+                    "Sending to closed event loop ({:?}): {error}",
+                    event_loop.id()
+                );
+            }
+        }
     }
 
     #[servo_tracing::instrument(skip_all)]
@@ -5707,6 +5731,9 @@ where
 
         if let Some(old_pipeline_id) = old_pipeline_id {
             self.unload_document(old_pipeline_id);
+            // Includes a navigation that replaced the current history entry, which adds
+            // no session history diff.
+            self.notify_frame_navigated(change.browsing_context_id, change.new_pipeline_id);
         }
 
         let Some(webview) = self.webviews.get_mut(&change.webview_id) else {
@@ -5732,6 +5759,8 @@ where
                     new_context_info.upgrade_insecure_navigations_set,
                 );
                 self.update_activity(change.new_pipeline_id);
+                // The frame's first document becoming active.
+                self.notify_frame_navigated(change.browsing_context_id, change.new_pipeline_id);
             },
             Some(old_pipeline_id) => {
                 // Deactivate the old pipeline, and activate the new one.
@@ -6149,7 +6178,6 @@ where
         }
     }
 
-    // Close and return the browsing context with the given id (and its children), if it exists.
     #[servo_tracing::instrument(skip_all)]
     fn close_browsing_context(
         &mut self,
@@ -6163,6 +6191,18 @@ where
             browsing_context_id,
             DiscardBrowsingContext::Yes,
         );
+
+        // Every descendant was closed, and so reported, just above: children first.
+        if let Some(browsing_context) = self.browsing_contexts.get(&browsing_context_id) &&
+            let Some(parent) = self.parent_browsing_context_id(browsing_context)
+        {
+            self.constellation_to_embedder_proxy
+                .send(ConstellationToEmbedderMsg::FrameRemoved(
+                    webview_id,
+                    browsing_context_id,
+                    parent,
+                ));
+        }
 
         let Some(webview) = self.webviews.get_mut(&webview_id) else {
             warn!("Closing BrowsingContext in unknown WebView: {webview_id:?}");
@@ -6623,3 +6663,8 @@ where
         }
     }
 }
+
+#[path = "../../vendor/open-letter/components/constellation/constellation.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

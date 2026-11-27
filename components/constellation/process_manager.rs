@@ -15,7 +15,7 @@ pub enum Process {
 }
 
 impl Process {
-    fn pid(&self) -> u32 {
+    pub(crate) fn pid(&self) -> u32 {
         match self {
             Self::Unsandboxed(child) => child.id(),
             Self::Sandboxed(pid) => *pid,
@@ -79,3 +79,8 @@ impl ProcessManager {
         process.wait();
     }
 }
+
+#[path = "../../vendor/open-letter/components/constellation/process_manager.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

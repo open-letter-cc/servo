@@ -856,6 +856,16 @@ pub enum CoreResourceMsg {
     ),
     RemoveCookieListener(CookieStoreId),
     ListCookies(GenericSender<Vec<SiteDescriptor>>),
+    /// Serialize one kind of site state as JSON, in the form of its file in the
+    /// config directory.
+    ExportSiteState(SiteStateKind, GenericSender<Vec<u8>>),
+    /// Combine site state serialized by `ExportSiteState` with the state held.
+    ImportSiteState(
+        SiteStateKind,
+        Vec<u8>,
+        SiteStateImportMode,
+        GenericSender<Result<(), String>>,
+    ),
     /// Get a history state by a given history state id
     GetHistoryState(HistoryStateId, GenericSender<Option<Vec<u8>>>),
     /// Set a history state for a given history state id
@@ -1463,3 +1473,8 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
 }
 
 pub static PRIVILEGED_SECRET: LazyLock<u32> = LazyLock::new(|| rng().next_u32());
+
+#[path = "../../../vendor/open-letter/components/shared/net/lib.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

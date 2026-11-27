@@ -1093,38 +1093,6 @@ impl ImageCache for ImageCacheImpl {
                 .remove_all_for_id(old_mapped_image_id);
         }
 
-        let natural_size = vector_image.svg_tree.size().to_int_size();
-        let natural_tinyskia_size = {
-            let width = natural_size.width().min(MAX_SVG_PIXMAP_DIMENSION);
-            let height = natural_size.height().min(MAX_SVG_PIXMAP_DIMENSION);
-            tiny_skia::IntSize::from_wh(width, height)
-        };
-        let tinyskia_requested_size = {
-            let width = requested_size
-                .width
-                .try_into()
-                .unwrap_or(0)
-                .min(MAX_SVG_PIXMAP_DIMENSION);
-            let height = requested_size
-                .height
-                .try_into()
-                .unwrap_or(0)
-                .min(MAX_SVG_PIXMAP_DIMENSION);
-            tiny_skia::IntSize::from_wh(width, height).or(natural_tinyskia_size)
-        };
-        let Some(tinyskia_requested_size) = tinyskia_requested_size else {
-            debug!(
-                "Asked for requested size {:?} which has zero size, and natural size {:?} has zero dimension. Not returning image",
-                requested_size, natural_size
-            );
-            return RasterizationResult::InvalidSvgParameters;
-        };
-
-        if natural_tinyskia_size.is_none() {
-            debug!("SVG natural size has zero dimension. Not returning image");
-            return RasterizationResult::InvalidSvgParameters;
-        }
-
         if store
             .svg_rasterization_task_store
             .is_or_set_being_rasterized(image_id, requested_size)
@@ -1132,60 +1100,15 @@ impl ImageCache for ImageCacheImpl {
             return RasterizationResult::PendingRasterization;
         }
 
+        let Some(pixmap_size) = svg_pixmap_size(&vector_image.svg_tree, requested_size) else {
+            return RasterizationResult::InvalidSvgParameters;
+        };
+
         let store = self.store.clone();
         self.thread_pool.spawn(move || {
-            let transform = tiny_skia::Transform::from_scale(
-                tinyskia_requested_size.width() as f32 / natural_size.width() as f32,
-                tinyskia_requested_size.height() as f32 / natural_size.height() as f32,
-            );
-            let mut pixmap = tiny_skia::Pixmap::new(
-                tinyskia_requested_size.width(),
-                tinyskia_requested_size.height(),
-            )
-            .unwrap();
-
-            // Some SVG documents, primarily ones created by fuzzers, can cause resvg to fail
-            // assertions and panic. We catch any panics in `resvg::render` here so that we don't
-            // crash the whole engine for such cases. In case of a panic, the completion listeners
-            // added for this request will never get called.
-            //
-            // We also need to set `SUPPRESS_ABORT_IN_PANIC_HOOK` for the duration of the call
-            // because servoshell registers a custom hook that intercepts the panic and crashes
-            // the process when run in hard_fail mode.
-            //
-            // `AssertUnwindSafe` should be safe here since we will remove the `vector_image`
-            // from `store.vector_images` and won't use it again. This assumes `resvg::render`
-            // doesn't use internal global state that could become invalid after the panic.
-            SUPPRESS_ABORT_IN_PANIC_HOOK.set(true);
-            let resvg_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                resvg::render(&vector_image.svg_tree, transform, &mut pixmap.as_mut());
-
-                let bytes = pixmap.take();
-                let frame = ImageFrame {
-                    delay: None,
-                    byte_range: 0..bytes.len(),
-                    width: tinyskia_requested_size.width(),
-                    height: tinyskia_requested_size.height(),
-                };
-
-                RasterImage {
-                    metadata: ImageMetadata {
-                        width: tinyskia_requested_size.width(),
-                        height: tinyskia_requested_size.height(),
-                    },
-                    format: PixelFormat::RGBA8,
-                    frames: vec![frame],
-                    bytes: Arc::new(bytes),
-                    id: None,
-                    cors_status: vector_image.cors_status,
-                    load_time: None,
-                    is_opaque: false,
-                    loop_count: None,
-                }
-            }));
-            SUPPRESS_ABORT_IN_PANIC_HOOK.set(false);
-
-            match resvg_result {
+            // In case of a panic, the completion listeners added for this request will never
+            // get called.
+            match render_svg(&vector_image, pixmap_size) {
                 Ok(rasterized_image) => {
                     let mut store = store.lock();
                     store.load_image_with_keycache(PendingKey::Svg((
@@ -1215,6 +1138,10 @@ impl ImageCache for ImageCacheImpl {
             }
         });
         RasterizationResult::PendingRasterization
+    }
+
+    fn rasterize_vector_image_now(&self, image_id: PendingImageId, requested_size: DeviceIntSize) -> Option<RasterImage> {
+        self.open_letter_rasterize_vector_image_now(image_id, requested_size)
     }
 
     /// Add a new listener for the given pending image id. If the image is already present,
@@ -1466,3 +1393,8 @@ impl ImageCacheImpl {
         warn!("Couldn't find cached entry for listener {:?}", id);
     }
 }
+
+#[path = "../../vendor/open-letter/components/net/image_cache.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

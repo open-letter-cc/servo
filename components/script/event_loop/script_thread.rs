@@ -171,7 +171,8 @@ use crate::navigation::{InProgressLoad, NavigationListener};
 use crate::realms::enter_auto_realm;
 use crate::runtime::job_queue::{MicrotaskRunnable, job_queue_microtask_checkpoint};
 use crate::runtime::script_runtime::{
-    IntroductionType, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext, get_reports,
+    IntroductionType, JSThreadKind, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext,
+    get_reports, set_js_thread_stack_size,
 };
 use crate::scripting::fetching_options::ScriptFetchOptions;
 use crate::scripting::script_execution::{RethrowErrors, ScriptOptions};
@@ -499,10 +500,13 @@ impl ScriptThreadFactory for ScriptThread {
         PipelineNamespace::set_installer_sender(state.namespace_request_sender.clone());
 
         let script_thread_id = state.id;
+        // 8 MiB by default, to be consistent with other browsers.
+        let stack_size = JSThreadKind::Script.stack_size();
         thread::Builder::new()
             .name(format!("Script#{script_thread_id}"))
-            .stack_size(8 * 1024 * 1024) // 8 MiB stack to be consistent with other browsers.
+            .stack_size(stack_size)
             .spawn(move || {
+                set_js_thread_stack_size(stack_size);
                 profile_traits::debug_event!(
                     "ScriptThread::spawned",
                     script_thread_id = script_thread_id.to_string()
@@ -2753,7 +2757,8 @@ impl ScriptThread {
         })
     }
 
-    /// Handle changes to the theme, triggering reflow if the theme actually changed.
+    /// Handle changes to the theme, system focus and visibility of a `WebView`, updating
+    /// its documents if any of them actually changed.
     fn handle_update_webview_state(&self, cx: &mut JSContext, new_state: WebViewState) {
         let Some(webview_state) = self
             .webview_states
@@ -2769,8 +2774,10 @@ impl ScriptThread {
         let new_has_system_focus = new_state.has_system_focus.get();
         let system_focus_changed =
             webview_state.has_system_focus.replace(new_has_system_focus) != new_has_system_focus;
+        let new_hidden = new_state.hidden.get();
+        let hidden_changed = webview_state.hidden.replace(new_hidden) != new_hidden;
 
-        if !theme_changed && !system_focus_changed {
+        if !theme_changed && !system_focus_changed && !hidden_changed {
             return;
         }
 
@@ -2793,6 +2800,9 @@ impl ScriptThread {
             }
             if system_focus_changed {
                 document.gained_or_lost_system_focus(cx, new_has_system_focus);
+            }
+            if hidden_changed {
+                document.system_visibility_changed();
             }
         }
     }

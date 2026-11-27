@@ -1100,6 +1100,8 @@ impl PlatformWindow for HeadedWindow {
             EmbedderControl::ContextMenu(prompt) => {
                 self.add_dialog(webview_id, Dialog::new_context_menu(prompt));
             },
+            // Never offered here; a page request has no user interface.
+            EmbedderControl::PageRequest(..) => {},
         }
     }
 

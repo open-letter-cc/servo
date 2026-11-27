@@ -75,6 +75,7 @@ pub use media::{
 };
 pub use net::image_cache::should_panic_hook_suppress_termination;
 pub use net_traits::CookieSource;
+pub use net_traits::{SiteStateImportMode, SiteStateKind};
 // This API should probably not be exposed in this way. Instead there should be a fully
 // fleshed out public domains API if we want to expose it.
 pub use net_traits::pub_domains::is_reg_domain;
@@ -90,7 +91,7 @@ pub use profile_traits;
 // See <https://github.com/servo/servo/issues/40950>.
 pub use resources;
 pub use servo_base::generic_channel::GenericSender;
-pub use servo_base::id::WebViewId;
+pub use servo_base::id::{BrowsingContextId, WebViewId};
 pub use servo_config::opts::{DiagnosticsLogging, DiagnosticsLoggingOption, Opts, OutputOptions};
 pub use servo_config::prefs::{PrefValue, Preferences, UserAgentPlatform};
 pub use servo_config::{opts, pref, prefs};
@@ -99,7 +100,7 @@ pub use servo_geometry::{
 };
 #[doc(hidden)]
 pub use servo_tracing;
-pub use servo_url::ServoUrl;
+pub use servo_url::{ImmutableOrigin, ServoUrl};
 pub use style::Zero;
 pub use style_traits::CSSPixel;
 pub use webrender_api::units::{
@@ -122,9 +123,12 @@ pub use crate::user_content_manager::UserContentManager;
 pub use crate::webview::{WebView, WebViewBuilder};
 pub use crate::webview_delegate::{
     AlertDialog, AllowOrDenyRequest, AuthenticationRequest, BluetoothDeviceSelectionRequest,
-    ColorPicker, ConfirmDialog, ContextMenu, CreateNewWebViewRequest, EmbedderControl, FilePicker,
-    InputMethodControl, NavigationRequest, PermissionRequest, PromptDialog, SelectElement,
-    SimpleDialog, WebResourceLoad, WebViewDelegate,
+    ColorPicker, ConfirmDialog, ContextMenu, CreateNewWebViewRequest, EMBEDDER_CONTROL_ALL,
+    EMBEDDER_CONTROL_CONTEXT_MENU, EMBEDDER_CONTROL_FILE_PICKER, EMBEDDER_CONTROL_HOST_REQUEST,
+    EMBEDDER_CONTROL_NONE, EMBEDDER_CONTROL_PAGE_REQUEST, EMBEDDER_CONTROL_SELECT, EmbedderControl,
+    EmbedderControlTag, FilePicker, FrameEvent, FrameEventKind, InputMethodControl,
+    NavigationRequest, PageRequest,
+    PermissionRequest, PromptDialog, SelectElement, SimpleDialog, WebResourceLoad, WebViewDelegate,
 };
 
 #[cfg(feature = "webxr")]

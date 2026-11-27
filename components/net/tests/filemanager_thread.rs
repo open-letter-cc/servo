@@ -17,7 +17,7 @@ use net_traits::filemanager_thread::{
     FileManagerThreadError, FileManagerThreadMsg, ReadFileProgress,
 };
 use profile_traits::generic_callback::GenericCallback;
-use servo_base::id::{TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
+use servo_base::id::{TEST_BROWSING_CONTEXT_ID, TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
 use servo_base::{Epoch, generic_channel};
 use servo_config::prefs::Preferences;
 use servo_url::ServoUrl;
@@ -54,6 +54,7 @@ fn test_filemanager() {
         let control_id = EmbedderControlId {
             webview_id: TEST_WEBVIEW_ID,
             pipeline_id: TEST_PIPELINE_ID,
+            browsing_context_id: TEST_BROWSING_CONTEXT_ID,
             index: Epoch(0),
         };
         let file_picker_request = FilePickerRequest {

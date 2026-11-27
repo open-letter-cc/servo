@@ -379,6 +379,8 @@ impl WindowProxy {
                 theme: Cell::new(window.webview_theme()),
                 // WebViews start focused by default for now.
                 has_system_focus: Cell::new(true),
+                // New WebViews start shown.
+                hidden: Cell::new(false),
             },
             parent_info: None,
             new_pipeline_id: response.new_pipeline_id,

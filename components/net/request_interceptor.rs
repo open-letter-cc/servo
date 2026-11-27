@@ -29,7 +29,14 @@ impl RequestInterceptor {
         timing_info: &ResourceFetchTimingContainer,
     ) {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let is_for_main_frame = matches!(request.destination, Destination::Document);
+        // A navigation inside a nested frame (a link followed there, or script setting its
+        // `location`) also has a `document` destination; only the frame's own `src` load
+        // is an `iframe` or `frame` one. The request's client says which it is.
+        let is_for_main_frame = matches!(request.destination, Destination::Document) &&
+            !request
+                .client
+                .as_ref()
+                .is_some_and(|client| client.is_nested_browsing_context);
         let web_resource_request = WebResourceRequest {
             method: request.method.clone(),
             url: request.url(),

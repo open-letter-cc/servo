@@ -1140,6 +1140,7 @@ impl LayoutThread {
             pending_images: Mutex::default(),
             pending_rasterization_images: Mutex::default(),
             pending_svg_elements_for_serialization: Mutex::default(),
+            restyled_svg_elements: Mutex::default(),
             animating_images: reflow_request.animating_images.clone(),
             animation_timeline_value: reflow_request.animation_timeline_value,
         });
@@ -1193,6 +1194,10 @@ impl LayoutThread {
             std::mem::take(&mut *image_resolver.pending_rasterization_images.lock());
         let pending_svg_elements_for_serialization =
             std::mem::take(&mut *image_resolver.pending_svg_elements_for_serialization.lock());
+        let mut restyled_svg_elements =
+            std::mem::take(&mut *image_resolver.restyled_svg_elements.lock());
+        restyled_svg_elements.sort_by_key(|address| address.0 as usize);
+        restyled_svg_elements.dedup();
 
         let lcp_candidate = self
             .paint_timing_handler
@@ -1206,6 +1211,7 @@ impl LayoutThread {
             pending_images,
             pending_rasterization_images,
             pending_svg_elements_for_serialization,
+            restyled_svg_elements,
             iframe_sizes: Some(iframe_sizes),
             reflow_statistics,
             changed_web_fonts,
@@ -1313,9 +1319,10 @@ impl LayoutThread {
             ua_or_user: &shared_locks.ua_or_user.read(),
         };
 
-        let rayon_pool = STYLE_THREAD_POOL.lock();
-        let rayon_pool = rayon_pool.pool();
-        let rayon_pool = rayon_pool.as_ref();
+        // The lock is held while laying out on either pool; see `STYLE_THREAD_POOL`.
+        let style_thread_pool = STYLE_THREAD_POOL.lock();
+        let style_thread_pool = style_thread_pool.pool();
+        let rayon_pool = LAYOUT_THREAD_POOL.as_ref().or(style_thread_pool.as_ref());
 
         let device_has_changed = std::mem::replace(&mut self.device_has_changed, false);
         let dangerous_root_element = unsafe { root_element.dangerous_style_element() };
@@ -2164,3 +2171,8 @@ struct StylistStylesheetUpdate {
     /// A list of changes to the set of web fonts.
     changed_web_fonts: WebFontSetDifference,
 }
+
+#[path = "../../vendor/open-letter/components/layout/layout_impl.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

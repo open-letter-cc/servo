@@ -7,6 +7,7 @@
 //! and generates a crash report when it receives a panic.
 
 use std::borrow::ToOwned;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::thread;
 
@@ -19,6 +20,11 @@ use servo_constellation_traits::{
     EmbedderToConstellationMessage, LogEntry, ScriptToConstellationMessage,
     ScriptToConstellationSender,
 };
+
+thread_local! {
+    /// Whether this thread is inside the `log` method of one of the loggers here.
+    static IN_LOGGER: Cell<bool> = const { Cell::new(false) };
+}
 
 /// A logger directed at the constellation from content processes
 /// #[derive(Clone)]
@@ -50,24 +56,7 @@ impl Log for FromScriptLogger {
     }
 
     fn log(&self, record: &Record) {
-        if let Some(entry) = log_entry(record) {
-            let thread_name = thread::current().name().map(ToOwned::to_owned);
-            let _ = self.script_to_constellation_sender.lock().send(
-                // TODO: The WebViewId and PipelineId are unused for the `LogEntry` method, but it
-                // would probably be better to have an entirely new message variant or sender for
-                // messages that definitely do not need these fields to avoid having to use the
-                // TEST_* values here.
-                (
-                    TEST_WEBVIEW_ID,
-                    TEST_PIPELINE_ID,
-                    ScriptToConstellationMessage::LogEntry(
-                        ScriptEventLoopId::installed(),
-                        thread_name,
-                        entry,
-                    ),
-                ),
-            );
-        }
+        without_reentry(|| self.send(record));
     }
 
     fn flush(&self) {}
@@ -100,13 +89,16 @@ impl Log for FromEmbedderLogger {
     }
 
     fn log(&self, record: &Record) {
-        if let Some(entry) = log_entry(record) {
-            let event_loop_id = ScriptEventLoopId::installed();
-            let thread_name = thread::current().name().map(ToOwned::to_owned);
-            let msg = EmbedderToConstellationMessage::LogEntry(event_loop_id, thread_name, entry);
-            let chan = self.constellation_chan.lock();
-            let _ = chan.send(msg);
-        }
+        without_reentry(|| {
+            if let Some(entry) = log_entry(record) {
+                let event_loop_id = ScriptEventLoopId::installed();
+                let thread_name = thread::current().name().map(ToOwned::to_owned);
+                let msg =
+                    EmbedderToConstellationMessage::LogEntry(event_loop_id, thread_name, entry);
+                let chan = self.constellation_chan.lock();
+                let _ = chan.send(msg);
+            }
+        });
     }
 
     fn flush(&self) {}
@@ -127,3 +119,8 @@ fn log_entry(record: &Record) -> Option<LogEntry> {
         _ => None,
     }
 }
+
+#[path = "../../vendor/open-letter/components/constellation/logging.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

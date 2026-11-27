@@ -723,3 +723,8 @@ pub unsafe extern "C" fn servo_preferences_get_f64_array(
     }
     current.len()
 }
+
+#[path = "../../vendor/open-letter/ffi/capi/preferences.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

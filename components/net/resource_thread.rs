@@ -23,10 +23,10 @@ use net_traits::pub_domains::public_suffix_list_size_of;
 use net_traits::request::{Destination, PreloadEntry, PreloadId, RequestBuilder, RequestId};
 use net_traits::response::{Response, ResponseInit};
 use net_traits::{
-    AsyncRuntime, CookieData, CookieSource, CoreResourceMsg, CoreResourceThread,
-    CustomResponseMediator, DiscardFetch, FetchChannels, FetchTaskTarget, NetworkError,
-    ResourceFetchTiming, ResourceThreads, ResourceTimingType, WebSocketDomAction,
-    WebSocketNetworkEvent,
+    AsyncRuntime, CookieAsyncResponse, CookieData, CookieSource, CoreResourceMsg,
+    CoreResourceThread, CustomResponseMediator, DiscardFetch, FetchChannels, FetchTaskTarget,
+    NetworkError, ResourceFetchTiming, ResourceThreads, ResourceTimingType, SiteStateImportMode,
+    SiteStateKind, WebSocketDomAction, WebSocketNetworkEvent,
 };
 use parking_lot::{Mutex, RwLock};
 use profile_traits::generic_callback::GenericCallback as ProfileGenericCallback;
@@ -649,8 +649,24 @@ impl ResourceChannelManager {
                     .unwrap_or_default();
                 sender.send_or_ignore(total);
             },
+            CoreResourceMsg::ExportSiteState(kind, sender) => {
+                let serialized = match kind {
+                    SiteStateKind::Cookies => serde_json::to_vec(&*http_state.cookie_jar.read()),
+                    SiteStateKind::Hsts => serde_json::to_vec(&*http_state.hsts_list.read()),
+                    SiteStateKind::AuthCache => serde_json::to_vec(&*http_state.auth_cache.read()),
+                };
+                sender.send_or_ignore(serialized.unwrap_or_default());
+            },
+            CoreResourceMsg::ImportSiteState(kind, data, mode, sender) => {
+                sender.send_or_ignore(import_site_state(http_state, kind, &data, mode));
+            },
             CoreResourceMsg::Exit(sender) => {
-                if let Some(ref config_dir) = self.config_dir {
+                // An embedder that keeps one store for several engines, through
+                // `ExportSiteState` and `ImportSiteState`, turns this off: each engine
+                // writing the whole store at exit would overwrite the others' changes.
+                if let Some(ref config_dir) = self.config_dir &&
+                    servo_config::pref!(network_site_state_write_on_exit)
+                {
                     let auth_cache = http_state.auth_cache.read();
                     servo_base::write_json_to_file(&*auth_cache, config_dir, "auth_cache.json");
                     let jar = http_state.cookie_jar.read();
@@ -965,3 +981,8 @@ impl CoreResourceManager {
         });
     }
 }
+
+#[path = "../../vendor/open-letter/components/net/resource_thread.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

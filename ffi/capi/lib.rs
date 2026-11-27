@@ -2,12 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+#[path = "../../vendor/open-letter/ffi/capi/clipboard.rs"]
+mod clipboard;
 mod options;
 mod preferences;
 mod rendering_context;
 mod servo;
 mod webview;
-mod webview_delegate;
+pub mod webview_delegate;
 
 extern crate servo as servo_api;
 
@@ -50,10 +52,19 @@ pub struct ServoBuilder {
 /// - `wake_callback` does not unwind across the FFI boundary.
 /// - `wake_callback` is safe to invoke from any thread, since Servo may
 ///   call it from internal threads.
+///
+/// # Layout
+///
+/// This struct has a fixed size of 16 bytes on a 64-bit host, so that embedders
+/// can rely on its layout across ABI boundaries. `_reserved` exists purely to
+/// pin that size; it must be set to zero and its meaning may change.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ServoEventLoopWaker {
     pub wake_callback: extern "C" fn(),
+
+    /// Reserved for future use. Must be zero.
+    pub _reserved: u64,
 }
 
 /// A no-op default `wake_callback` used when the embedder has not set
@@ -64,6 +75,7 @@ impl Default for ServoEventLoopWaker {
     fn default() -> Self {
         Self {
             wake_callback: default_event_loop_waker_wake_callback,
+            _reserved: 0,
         }
     }
 }
@@ -255,3 +267,8 @@ pub unsafe extern "C" fn servo_builder_free(builder: *mut ServoBuilder) {
         let _ = Box::from_raw(builder);
     }
 }
+
+#[path = "../../vendor/open-letter/ffi/capi/lib.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

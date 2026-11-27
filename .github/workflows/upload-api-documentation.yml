@@ -1,9 +1,6 @@
 name: Upload API Documentation
 
 on:
-  schedule:
-    # This runs the job at 3am UTC every day.
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:

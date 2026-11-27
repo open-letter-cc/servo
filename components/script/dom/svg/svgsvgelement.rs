@@ -12,7 +12,7 @@ use dom_struct::dom_struct;
 use html5ever::{LocalName, Prefix, local_name, ns};
 use js::context::{JSContext, NoGC};
 use js::rust::HandleObject;
-use layout_api::SVGElementData;
+use layout_api::{SVG_PAINT_PROPERTIES, SVGElementData, svg_paint_values};
 use servo_url::ServoUrl;
 use style::attr::{AttrValue, parse_double};
 use style::parser::ParserContext;
@@ -39,6 +39,7 @@ use crate::dom::node::{
     ChildrenMutation, CloneChildrenFlag, Node, NodeDamage, NodeTraits, UnbindContext,
 };
 use crate::dom::svg::svggraphicselement::SVGGraphicsElement;
+use crate::dom::svg::svgimageelement::SVGImageElement;
 
 #[dom_struct]
 pub(crate) struct SVGSVGElement {
@@ -51,6 +52,10 @@ pub(crate) struct SVGSVGElement {
     // on each layout and must be invalidated when the subtree changes.
     #[no_trace]
     cached_serialized_data_url: AtomicRefCell<Option<Result<ServoUrl, ()>>>,
+    /// The computed paint values written into the cached serialization, one line per
+    /// element of the subtree, used to tell whether a restyle changed any of them.
+    #[no_trace]
+    cached_paint_values: AtomicRefCell<Option<String>>,
 }
 
 impl SVGSVGElement {
@@ -64,6 +69,7 @@ impl SVGSVGElement {
             uuid: Uuid::new_v4(),
             viewbox_ratio: Default::default(),
             cached_serialized_data_url: Default::default(),
+            cached_paint_values: Default::default(),
         }
     }
 
@@ -101,6 +107,9 @@ impl SVGSVGElement {
             *self.cached_serialized_data_url.borrow_mut() = Some(Err(()));
             return;
         }
+
+        let paint_values = Self::write_computed_paint_values(cx, self.upcast(), &cloned_node);
+        *self.cached_paint_values.borrow_mut() = Some(paint_values);
 
         self.process_use_elements(cx, &cloned_node);
 
@@ -186,6 +195,7 @@ impl SVGSVGElement {
         }
 
         *self.cached_serialized_data_url.borrow_mut() = None;
+        *self.cached_paint_values.borrow_mut() = None;
         self.upcast::<Node>().dirty(no_gc, NodeDamage::Other);
     }
 
@@ -329,3 +339,8 @@ impl VirtualMethods for SVGSVGElement {
         self.invalidate_cached_serialized_subtree_and_rasterization_result(cx.no_gc());
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/svg/svgsvgelement.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -8,7 +8,9 @@ use bitflags::bitflags;
 use cookie::Cookie;
 use log::warn;
 use net_traits::pub_domains::registered_domain_name;
-use net_traits::{CookieOperationId, ResourceThreads, SiteDescriptor};
+use net_traits::{
+    CookieOperationId, ResourceThreads, SiteDescriptor, SiteStateImportMode, SiteStateKind,
+};
 use rustc_hash::FxHashMap;
 use servo_url::ServoUrl;
 use storage_traits::StorageThreads;
@@ -381,3 +383,8 @@ impl SiteDataManager {
         id
     }
 }
+
+#[path = "../../vendor/open-letter/components/servo/site_data_manager.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

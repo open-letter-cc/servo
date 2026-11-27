@@ -55,6 +55,9 @@ trait RegistryEngine {
 struct SqliteEngine {
     connection: Connection,
     base_dir: PathBuf,
+    /// Whether nothing is kept on disk: the registry is in memory, and the paths it hands
+    /// out name databases without any directory being created for them.
+    in_memory: bool,
 }
 
 impl SqliteEngine {
@@ -65,6 +68,7 @@ impl SqliteEngine {
         Ok(SqliteEngine {
             connection,
             base_dir,
+            in_memory: false,
         })
     }
 
@@ -74,6 +78,7 @@ impl SqliteEngine {
         Ok(SqliteEngine {
             connection,
             base_dir: PathBuf::new(),
+            in_memory: false,
         })
     }
 
@@ -403,7 +408,12 @@ fn storage_quota_for_bucket(_bucket_id: i64, _tx: &Transaction) -> Result<u64, S
 /// The storage usage of a storage shelf is an implementation-defined rough estimate of the amount
 /// of bytes used by it.
 fn directory_size(path: &PathBuf) -> Result<u64, String> {
-    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        // A database kept in memory has no directory, and so no usage on disk.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    };
     if metadata.is_file() {
         return Ok(metadata.len());
     }
@@ -478,7 +488,10 @@ impl RegistryEngine for SqliteEngine {
 
         tx.commit().map_err(ClientStorageErrorr::Internal)?;
 
-        std::fs::create_dir_all(&path).map_err(|_| ClientStorageErrorr::DirectoryCreationFailed)?;
+        if !self.in_memory {
+            std::fs::create_dir_all(&path)
+                .map_err(|_| ClientStorageErrorr::DirectoryCreationFailed)?;
+        }
 
         Ok((path, true))
     }
@@ -518,7 +531,10 @@ impl RegistryEngine for SqliteEngine {
         // Delete the directory on disk.
         // Note: on Windows this needs to be done outside of the transaction,
         // because the transaction holds a file lock.
-        std::fs::remove_dir_all(&path).map_err(|_| ClientStorageErrorr::DirectoryDeletionFailed)?;
+        if !self.in_memory {
+            std::fs::remove_dir_all(&path)
+                .map_err(|_| ClientStorageErrorr::DirectoryDeletionFailed)?;
+        }
 
         Ok(())
     }
@@ -672,6 +688,22 @@ pub trait ClientStorageThreadFactory {
 impl ClientStorageThreadFactory for ClientStorageThreadHandle {
     fn new(config_dir: Option<PathBuf>, temporary_storage: bool) -> ClientStorageThreadHandle {
         let (generic_sender, generic_receiver) = generic_channel::channel().unwrap();
+
+        // Temporary storage keeps the registry, and every database it hands out, in memory,
+        // so that nothing outlives the process, including after a crash.
+        if temporary_storage {
+            let sender_clone = generic_sender.clone();
+            thread::Builder::new()
+                .name("ClientStorageThread".to_owned())
+                .spawn(move || {
+                    let engine = SqliteEngine::temporary()
+                        .expect("Failed to initialize in-memory ClientStorage engine");
+                    ClientStorageThread::new(sender_clone, generic_receiver, engine).start();
+                })
+                .expect("Thread spawning failed");
+            return ClientStorageThreadHandle::new(generic_sender);
+        }
+
         let mut temp_dir: Option<tempfile::TempDir> = None;
         let has_config_dir = config_dir.is_some();
         let base_dir = config_dir
@@ -682,21 +714,7 @@ impl ClientStorageThreadFactory for ClientStorageThreadHandle {
                 path
             })
             .join("clientstorage");
-        let storage_dir = match (has_config_dir, temporary_storage) {
-            (true, true) => {
-                let tmp_base = base_dir.join("temporary");
-                std::fs::create_dir_all(&tmp_base).unwrap();
-                let tmp_dir = tempfile::tempdir_in(tmp_base).unwrap();
-                let path = tmp_dir.path().to_path_buf();
-                temp_dir = Some(tmp_dir);
-                path
-            },
-            (false, true) => {
-                let unique_id = uuid::Uuid::new_v4().to_string();
-                base_dir.join("temporary").join(unique_id)
-            },
-            (_, false) => base_dir.join("default_v1"),
-        };
+        let storage_dir = base_dir.join("default_v1");
         std::fs::create_dir_all(&storage_dir)
             .expect("Failed to create ClientStorage storage directory");
         let sender_clone = generic_sender.clone();
@@ -796,26 +814,7 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::{ClientStorageThreadFactory, ClientStorageThreadHandle};
-
-    /// <https://github.com/servo/servo/issues/49656>
-    #[test]
-    fn test_client_tmp_cleanup_with_config_dir() {
-        let tmp_config_dir = tempfile::tempdir().unwrap();
-        let config_dir = tmp_config_dir.path();
-
-        let handle = <ClientStorageThreadHandle as ClientStorageThreadFactory>::new(
-            Some(config_dir.to_path_buf()),
-            true,
-        );
-        drop(handle);
-
-        // Check if temp dir is cleared.
-        let mut entries = fs::read_dir(config_dir.join("clientstorage").join("temporary")).unwrap();
-        assert!(entries.next().is_none());
-    }
-}
+#[path = "../../vendor/open-letter/components/storage/client_storage.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

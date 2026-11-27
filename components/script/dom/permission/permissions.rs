@@ -363,6 +363,8 @@ fn prompt_user_from_embedder(name: PermissionName, global_scope: &GlobalScope) -
     global_scope.send_to_embedder(EmbedderMsg::PromptPermission(
         webview_id,
         name.convert(),
+        global_scope.origin().immutable().clone(),
+        requesting_browsing_context(global_scope),
         sender,
     ));
 
@@ -410,6 +412,8 @@ pub(crate) fn request_permission_to_use_async(
     global_scope.send_to_embedder(EmbedderMsg::RequestPermission(
         webview_id,
         name.convert(),
+        global_scope.origin().immutable().clone(),
+        requesting_browsing_context(global_scope),
         callback,
     ));
     AsyncPermissionRequest::Prompting
@@ -454,3 +458,8 @@ impl Convert<PermissionFeature> for PermissionName {
         }
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/permission/permissions.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

@@ -19,7 +19,8 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::CGGlyph;
 use objc2_core_text::{
-    CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorFromData, CTFontOrientation,
+    CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorFromData,
+    CTFontManagerCreateFontDescriptorsFromData, CTFontOrientation,
     CTFontSymbolicTraits, CTFontTableOptions, CTFontTableTag, kCTFontSlantTrait,
     kCTFontSymbolicTrait, kCTFontURLAttribute, kCTFontVariationAttribute,
     kCTFontVariationAxisDefaultValueKey, kCTFontVariationAxisIdentifierKey,
@@ -91,14 +92,37 @@ impl PlatformFont {
 
     fn new(
         font_identifier: FontIdentifier,
-        data: Option<&FontData>,
+        data: Option<(&FontData, u32)>,
         requested_size: Option<Au>,
     ) -> Result<PlatformFont, &'static str> {
         // If you pass a zero font size to one of the Core Text APIs, it'll replace it with
         // 12.0. We don't want that! (Issue #10492.)
         let clamped_pt_size = requested_size.unwrap_or_default().to_f64_px().max(0.01);
-        let descriptor = match font_identifier {
-            FontIdentifier::Local(local_font_identifier) => {
+        let descriptor = match (font_identifier, data) {
+            // A local font whose bytes were supplied (by the system font service, so
+            // that this process need not open the file) is created from the data. For
+            // a collection, `face_index` was found in the main process by matching the
+            // PostScript name, in the file's face order, which is also the order
+            // CoreText returns descriptors in.
+            (FontIdentifier::Local(_), Some((data, face_index))) => {
+                let data = CFData::from_bytes(data.as_ref());
+                let descriptors = unsafe { CTFontManagerCreateFontDescriptorsFromData(&data) };
+                let count = descriptors.count();
+                if count == 0 {
+                    return Err("Could not create CTFont from local font data");
+                }
+                let index = (face_index as CFIndex).min(count - 1);
+                let descriptor =
+                    unsafe { descriptors.value_at_index(index) } as *mut CTFontDescriptor;
+                // SAFETY: the array owns a retained descriptor at every index below
+                // `count`; retaining it keeps it alive past the array.
+                unsafe {
+                    CFRetained::retain(
+                        NonNull::new(descriptor).ok_or("Null CTFontDescriptor in font data")?,
+                    )
+                }
+            },
+            (FontIdentifier::Local(local_font_identifier), None) => {
                 // Other platforms can instantiate a platform font by loading the data
                 // from a file and passing an index in the case the file is a TTC bundle.
                 // The only way to reliably load the correct font from a TTC bundle on
@@ -118,10 +142,8 @@ impl PlatformFont {
                     );
                 unsafe { descriptor.copy_with_attributes(attributes.as_opaque()) }
             },
-            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => {
-                let data = data
-                    .expect("Should always have FontData for web fonts")
-                    .clone();
+            (FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_), data) => {
+                let (data, _) = data.expect("Should always have FontData for web fonts");
                 let data = CFData::from_bytes(data.as_ref());
                 unsafe {
                     CTFontManagerCreateFontDescriptorFromData(&data)
@@ -187,9 +209,10 @@ impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
         font_identifier: FontIdentifier,
         data: &FontData,
+        face_index: u32,
         requested_size: Option<Au>,
     ) -> Result<PlatformFont, &'static str> {
-        Self::new(font_identifier, Some(data), requested_size)
+        Self::new(font_identifier, Some((data, face_index)), requested_size)
     }
 
     fn new_from_local_font_identifier(
@@ -306,6 +329,12 @@ impl PlatformFontMethods for PlatformFont {
         }
 
         Some(glyphs[0] as GlyphId)
+    }
+
+    fn glyph_h_kerning(&self, _first_glyph: GlyphId, _second_glyph: GlyphId) -> FractionalPixel {
+        // The `kern` table reader is not carried over for macOS, so the fast shaping
+        // path is off there and this is never reached.
+        0.0
     }
 
     fn glyph_h_advance(&self, glyph: GlyphId) -> Option<FractionalPixel> {

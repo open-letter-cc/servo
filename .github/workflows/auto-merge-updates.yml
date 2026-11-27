@@ -1,5 +1,6 @@
 name: Automerge Dependabot & WPT Updates
-on: pull_request
+on:
+  workflow_dispatch:
 
 permissions:
   pull-requests: read

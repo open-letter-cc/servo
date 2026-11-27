@@ -1,8 +1,7 @@
 name: Try (Label)
 
 on:
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
 
 jobs:
   parse-comment:

@@ -427,3 +427,8 @@ fn test_preload_hsts_domains_well_formed() {
     let hsts_list = HstsPreloadList::from_servo_preload();
     assert_ne!(hsts_list.len(), 0);
 }
+
+#[path = "../../../vendor/open-letter/components/net/tests/hsts.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

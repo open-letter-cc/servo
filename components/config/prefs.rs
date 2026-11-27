@@ -117,6 +117,10 @@ pub struct Preferences {
     /// - harfbuzz - Use HarfBuzz shaper
     /// - compare  - debug setting which runs both shaping backends, diffs output and compares performance.
     pub fonts_shaping_backend: String,
+    /// Whether Latin left-to-right ASCII text in a font with a `kern` table and neither
+    /// `GSUB` nor `GPOS` is shaped by the simple kerning fast path instead of the shaping
+    /// backend. Turn it off to compare the two. The fast path is never used on macOS.
+    pub fonts_fast_shaping_enabled: bool,
     /// The amount of time that a half cycle of a text caret blink takes in milliseconds.
     /// If this value is less than or equal to zero, then caret blink is disabled.
     pub editing_caret_blink_time: u64,
@@ -164,6 +168,10 @@ pub struct Preferences {
     pub dom_crypto_subtle_enabled: bool,
     pub dom_document_dblclick_timeout: u64,
     pub dom_document_dblclick_dist: u64,
+    /// Exposes `EmbedderRequest.send()`, which delivers bytes from page script to the
+    /// embedder as a page-request embedder control. Off by default: no document sees it
+    /// unless the embedder turns it on.
+    pub dom_embedder_request_enabled: bool,
     // feature: File and Directory Entries API | #45653 | Web/API/File_and_Directory_Entries_API
     pub dom_entries_api_enabled: bool,
     // feature: Document.execCommand | #25005 | Web/API/Document/execCommand
@@ -375,6 +383,10 @@ pub struct Preferences {
     pub network_enforce_tls_localhost: bool,
     pub network_enforce_tls_onion: bool,
     pub network_http_cache_disabled: bool,
+    /// Whether the cookie jar, HSTS list and authentication cache are written to the
+    /// config directory when the engine exits. An embedder that keeps one store for
+    /// several engines turns this off and moves the state itself.
+    pub network_site_state_write_on_exit: bool,
     /// The path to a disk cache file. Empty string disables the disk cache.
     pub network_http_disk_cache: String,
     /// Maximum size of the disk cache file in bytes.
@@ -411,6 +423,19 @@ pub struct Preferences {
     pub webgl_testing_context_creation_error: bool,
     /// Maximum number of workers for the main thread pool
     pub thread_pool_workers_max: u64,
+    /// The stack size of each script thread, in KiB. JavaScript running on it may use
+    /// half of it; the rest is kept for the engine's own frames (layout among them), so
+    /// that deep recursion in script throws a catchable error instead of overflowing.
+    /// Values below 1024 are raised to 1024.
+    pub thread_script_stack_size_kb: i64,
+    /// The stack size of each worker and worklet thread, in KiB, divided as for
+    /// [`Self::thread_script_stack_size_kb`]. Values below 1024 are raised to 1024.
+    pub thread_worker_stack_size_kb: i64,
+    /// The stack size of the threads that style and lay out pages in parallel, in KiB.
+    /// 0 keeps the style system's own pool and its stack size; a larger value gives
+    /// layout a pool of its own with stacks of this size, for pages nested deeply
+    /// enough to exhaust the default. Read when the pool is first used.
+    pub thread_layout_stack_size_kb: i64,
     /// Number of workers per thread pool, if we fail to detect how much
     /// parallelism is available at runtime.
     pub thread_pool_fallback_workers: u64,
@@ -464,6 +489,7 @@ impl Preferences {
             dom_crypto_subtle_enabled: true,
             dom_document_dblclick_dist: 1,
             dom_document_dblclick_timeout: 300,
+            dom_embedder_request_enabled: false,
             dom_entries_api_enabled: false,
             dom_exec_command_enabled: false,
             dom_fontface_enabled: false,
@@ -545,6 +571,7 @@ impl Preferences {
             fonts_sans_serif: String::new(),
             fonts_serif: String::new(),
             fonts_shaping_backend: String::new(),
+            fonts_fast_shaping_enabled: true,
             gfx_precache_shaders: false,
             gfx_text_antialiasing_enabled: true,
             gfx_subpixel_text_antialiasing_enabled: true,
@@ -607,6 +634,7 @@ impl Preferences {
             network_enforce_tls_localhost: false,
             network_enforce_tls_onion: false,
             network_http_cache_disabled: false,
+            network_site_state_write_on_exit: true,
             network_http_disk_cache: String::new(),
             network_http_disk_cache_size: 1024 * 1024 * 100, // Roughtly 100MB
             network_http_proxy_uri: String::new(),
@@ -621,6 +649,9 @@ impl Preferences {
             shell_background_color_rgba: [1.0, 1.0, 1.0, 1.0],
             log_filter: String::new(),
             thread_pool_workers_max: 4,
+            thread_script_stack_size_kb: 8 * 1024,
+            thread_worker_stack_size_kb: 2 * 1024,
+            thread_layout_stack_size_kb: 0,
             thread_pool_async_runtime_workers_max: 6,
             thread_pool_fallback_workers: 3,
             // <https://github.com/linebender/vello/blob/c95b228e1cf73bf96338e8c8ae0d145553f8f99c/sparse_strips/vello_cpu/examples/basic.rs#L51>

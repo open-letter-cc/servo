@@ -7,7 +7,7 @@ use embedder_traits::{
     MediaSessionEvent, NewWebViewDetails, TraversalId,
 };
 use servo_base::generic_channel::GenericSender;
-use servo_base::id::{PipelineId, WebViewId};
+use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_url::ServoUrl;
 
 /// Messages sent from the `Constellation` to the embedder.
@@ -42,4 +42,18 @@ pub enum ConstellationToEmbedderMsg {
     HistoryChanged(WebViewId, Vec<ServoUrl>, usize),
     /// A pipeline exited, whether cleanly or because its content process died.
     PipelineExited(PipelineId),
+    /// A new document became active in a frame: the frame's browsing context, its
+    /// parent's (`None` for a top-level frame), the document's URL, and the
+    /// operating-system id of the content process the document runs in (`None` when it
+    /// runs in this process).
+    FrameNavigated(
+        WebViewId,
+        BrowsingContextId,
+        Option<BrowsingContextId>,
+        ServoUrl,
+        Option<u32>,
+    ),
+    /// A frame was removed: its browsing context and its parent's. A frame's descendants
+    /// are always reported removed before the frame itself.
+    FrameRemoved(WebViewId, BrowsingContextId, Option<BrowsingContextId>),
 }

@@ -2,7 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use servo_api::Servo;
+use std::ffi::{CStr, c_char, c_void};
+#[cfg(feature = "multiprocess")]
+use std::panic;
+
+use servo_api::{Servo, SiteStateImportMode, SiteStateKind};
 
 /// Destroys the `Servo` instance returned by `servo_builder_build` and
 /// frees its memory.
@@ -82,3 +86,8 @@ pub unsafe extern "C" fn servo_setup_logging(servo: *mut Servo) {
 
     servo.setup_logging();
 }
+
+#[path = "../../vendor/open-letter/ffi/capi/servo.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

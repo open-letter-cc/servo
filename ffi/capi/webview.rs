@@ -6,11 +6,15 @@ use std::ffi::{CStr, c_void};
 use std::os::raw::c_char;
 use std::rc::Rc;
 
+#[cfg(not(capi_full))]
 use euclid::Scale;
-use servo_api::{Servo, WebView, WebViewBuilder};
+use servo_api::{Servo, UserContentManager, UserScript, WebView, WebViewBuilder};
 
 use crate::rendering_context::RenderingContext;
-use crate::webview_delegate::ServoWebViewDelegate;
+use crate::webview_delegate::{
+    ResourceRequestHook, ServoResourceRequestCallback, ServoWebViewDelegate, forget_webview,
+    register_capi_webview, set_resource_request_hook,
+};
 
 /// An opaque struct representing a builder object for constructing new
 /// `WebView`s.
@@ -28,6 +32,12 @@ pub struct ServoWebViewBuilder {
     rendering_context: Rc<dyn servo_api::RenderingContext>,
     url: Option<url::Url>,
     delegate: Option<ServoWebViewDelegate>,
+    /// Set by `servo_webview_builder_set_resource_request_callback`.
+    resource_request: Option<ResourceRequestHook>,
+    /// User scripts to install, in the order they were added. A `WebView` only has a
+    /// `UserContentManager` if at least one script is added before it is built, which
+    /// is also what makes `servo_webview_add_script` work on it afterwards.
+    user_scripts: Vec<String>,
 }
 
 /// Creates a handle to a new `WebViewBuilder` object for the given
@@ -79,6 +89,8 @@ pub unsafe extern "C" fn servo_webview_builder_create(
         rendering_context: boxed_c_context.inner,
         url: None,
         delegate: None,
+        resource_request: None,
+        user_scripts: Vec::new(),
     }))
 }
 
@@ -193,11 +205,45 @@ pub unsafe extern "C" fn servo_webview_builder_build(
         webview_builder = webview_builder.url(url);
     }
 
+    // A resource request callback is read from the `WebView`'s `ServoWebViewDelegate`,
+    // so a builder given a callback and no delegate gets an empty one: every callback
+    // `NULL`, which keeps Servo's default for each. A builder given neither keeps
+    // Servo's own default delegate, exactly as before.
+    let capi_delegate = match (builder.delegate, builder.resource_request) {
+        (Some(delegate), _) => Some(delegate),
+        (None, Some(_)) => Some(ServoWebViewDelegate::empty()),
+        (None, None) => None,
+    };
+
     if let Some(delegate) = builder.delegate {
+        // Installed whenever a `ServoWebViewDelegate` is set at all, so the clipboard
+        // gate cannot be bypassed by a `WebView` that configured a delegate for other
+        // callbacks but left `request_clipboard_access` null — that still allows, per
+        // its own documented default, rather than skipping the gate entirely.
+        webview_builder = webview_builder.clipboard_delegate(std::rc::Rc::new(
+            crate::clipboard::CapiClipboardDelegate(delegate),
+        ));
+    }
+    if let Some(delegate) = capi_delegate {
         webview_builder = webview_builder.delegate(std::rc::Rc::new(delegate));
     }
 
-    Box::into_raw(Box::new(webview_builder.build()))
+    // Every `WebView` gets a `UserContentManager`, whether or not a script was added
+    // here. Creating it lazily would make `servo_webview_add_script` work only on a
+    // `WebView` that happened to be built with a script already, and there is no way to
+    // attach a manager after the fact — a conditional nobody remembers by the time a
+    // script is added later.
+    let user_content_manager = Rc::new(UserContentManager::new(&builder.servo));
+    for script in builder.user_scripts {
+        user_content_manager.add_script(Rc::new(UserScript::new(script, None)));
+    }
+    webview_builder = webview_builder.user_content_manager(user_content_manager);
+
+    let webview = webview_builder.build();
+    if capi_delegate.is_some() {
+        register_capi_webview(webview.id(), builder.resource_request);
+    }
+    Box::into_raw(Box::new(webview))
 }
 
 /// Destroys `builder` and frees its memory.
@@ -271,6 +317,10 @@ pub unsafe extern "C" fn servo_webview_paint(webview: *mut WebView) {
 ///   for the duration of this call.
 /// - The call is made from the same thread that originally created the
 ///   `WebView` via `servo_webview_builder_build`.
+// The full-surface cdylib (`ffi/capi-full`) includes this file and ships its own
+// `servo_webview_set_hidpi_scale_factor`, which validates the factor and returns a
+// status; it compiles this file with `capi_full` set so that only one is defined.
+#[cfg(not(capi_full))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn servo_webview_set_hidpi_scale_factor(
     webview: *mut WebView,
@@ -351,7 +401,22 @@ pub unsafe extern "C" fn servo_webview_resize(webview: *mut WebView, width: u32,
 /// The function panics if it is not a valid UTF-8 string.
 /// The ownership of `url` remains with the caller after the call.
 ///
-/// Returns 0 on success, or -1 if the URL could not be parsed.
+/// Returns 0 on success, or -1 if the URL could not be parsed. **The return
+/// value reports only whether the URL parsed**, not that the load will
+/// happen: the load is handed to Servo without acknowledgement, and nothing
+/// here can report what becomes of it.
+///
+/// # Loading before the first load has committed
+///
+/// A `WebView` begins loading as soon as it is built — the URL given to
+/// `servo_webview_builder_set_url`, or `about:blank` when none was given. A
+/// load issued through this function before that first load has committed
+/// may be superseded by it and silently dropped, having already returned 0.
+///
+/// To open a `WebView` on a particular URL, set it on the builder rather
+/// than building the `WebView` and loading immediately afterwards. Where a
+/// load really must follow creation, wait until
+/// `notify_load_status_changed` reports `SERVO_LOAD_STATUS_COMPLETE` first.
 ///
 /// # Safety
 ///
@@ -504,7 +569,11 @@ pub unsafe extern "C" fn servo_webview_free(webview: *mut WebView) {
 
     // SAFETY: The caller is assumed to uphold the safety requirements
     // for `webview` documented above.
-    unsafe {
-        let _ = Box::from_raw(webview);
-    }
+    let webview = unsafe { Box::from_raw(webview) };
+    forget_webview(webview.id());
 }
+
+#[path = "../../vendor/open-letter/ffi/capi/webview.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

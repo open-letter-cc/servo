@@ -114,7 +114,7 @@ use crate::dom::StatelessWorkletThreadPool;
 use crate::dom::bindings::callback::RootedCallback;
 use crate::dom::bindings::codegen::Bindings::AnimationFrameProviderBinding::FrameRequestCallback;
 use crate::dom::bindings::codegen::Bindings::DocumentBinding::{
-    DocumentMethods, DocumentReadyState, NamedPropertyValue,
+    DocumentMethods, DocumentReadyState, DocumentVisibilityState, NamedPropertyValue,
 };
 use crate::dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElementMethods;
 use crate::dom::bindings::codegen::Bindings::HistoryBinding::History_Binding::HistoryMethods;
@@ -2904,6 +2904,7 @@ impl Window {
             reflow_result.pending_images,
             reflow_result.pending_rasterization_images,
             reflow_result.pending_svg_elements_for_serialization,
+            reflow_result.restyled_svg_elements,
         );
 
         if let Some(candidate) = reflow_result.lcp_candidate {
@@ -3988,6 +3989,7 @@ impl Window {
         pending_images: Vec<PendingImage>,
         pending_rasterization_images: Vec<PendingRasterizationImage>,
         pending_svg_element_for_serialization: Vec<UntrustedNodeAddress>,
+        restyled_svg_elements: Vec<UntrustedNodeAddress>,
     ) {
         let pipeline_id = self.pipeline_id();
         let image_cache = self.image_cache();
@@ -4054,6 +4056,13 @@ impl Window {
             let svg = node.downcast::<SVGSVGElement>().unwrap();
             svg.serialize_and_cache_subtree(cx);
             node.dirty(cx.no_gc(), NodeDamage::Other);
+        }
+
+        for node in restyled_svg_elements.into_iter() {
+            let node = unsafe { from_untrusted_node_address(node) };
+            if let Some(svg) = node.downcast::<SVGSVGElement>() {
+                svg.reserialize_if_paint_changed(cx);
+            }
         }
     }
 
@@ -4577,3 +4586,8 @@ impl HasOrigin for Window {
         Window::origin(self)
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/window/window.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

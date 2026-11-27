@@ -224,3 +224,8 @@ pub struct FontFaceRuleInfo {
     #[conditional_malloc_size_of]
     pub rule: ServoArc<LockedFontFaceRule>,
 }
+
+#[path = "../../../vendor/open-letter/components/shared/fonts/lib.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

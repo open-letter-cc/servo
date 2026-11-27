@@ -1211,7 +1211,9 @@ impl Document {
                 // Step 4.6.2 Set document's page showing flag to true.
                 document.page_showing.set(true);
                 // Step 4.6.3 Update the visibility state of document to "visible".
-                document.update_visibility_state(cx, DocumentVisibilityState::Visible);
+                // A document reactivated in a hidden `WebView` is not visible, so this
+                // uses the system visibility state instead.
+                document.update_visibility_state(cx, window.system_visibility_state());
                 // Step 4.6.4 Fire a page transition event named pageshow at document's relevant
                 // global object with true.
                 let event = PageTransitionEvent::new(
@@ -4483,10 +4485,7 @@ impl Document {
             declarative_refresh: Default::default(),
             resize_observers: Default::default(),
             fonts: Default::default(),
-            // TODO: This is intended to workaround the issue where `visibilityState`
-            // is always hidden. This should really be hooked with system visibility
-            // which involves more work.
-            visibility_state: Cell::new(DocumentVisibilityState::Visible),
+            visibility_state: Cell::new(window.system_visibility_state()),
             status_code,
             is_initial_about_blank: Cell::new(is_initial_about_blank),
             allow_declarative_shadow_roots: Cell::new(allow_declarative_shadow_roots),
@@ -7856,3 +7855,8 @@ impl Iterator for LocalDescendantNavigablesIterator {
         None
     }
 }
+
+#[path = "../../../../vendor/open-letter/components/script/dom/document/document.rs"]
+mod open_letter;
+#[allow(unused_imports)]
+pub use open_letter::*;

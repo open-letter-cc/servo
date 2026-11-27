@@ -1,8 +1,6 @@
 name: Try
 
 on:
-  push:
-    branches: ["try"]
   workflow_dispatch:
     inputs:
       profile:

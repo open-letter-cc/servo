@@ -1,13 +1,6 @@
 name: Main
 
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    types: ['opened', 'synchronize']
-    branches: ["**"]
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 # When this is a pull request workflow run , ensure that any previously triggered workflows runs for

@@ -75,6 +75,11 @@ pub struct WebViewState {
     /// Whether or not the `WebView` has system focus. More than one `WebView` may have
     /// system focus at one time.
     pub has_system_focus: Cell<bool>,
+    /// Whether or not the `WebView` is hidden by the embedder. This is the system
+    /// visibility state of the `WebView`'s top-level traversable, and so the
+    /// visibility state of every document in it, nested documents included.
+    /// <https://html.spec.whatwg.org/multipage/#system-visibility-state>
+    pub hidden: Cell<bool>,
 }
 
 /// The initial data required to create a new `Pipeline` attached to an existing `ScriptThread`.

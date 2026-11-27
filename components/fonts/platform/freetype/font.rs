@@ -9,8 +9,9 @@ use app_units::Au;
 use euclid::default::{Point2D, Rect, Size2D};
 use fonts_traits::{FontDataAndIndex, FontIdentifier, LocalFontIdentifier, SkrifaFont};
 use freetype_sys::{
-    FT_F26Dot6, FT_Get_Char_Index, FT_GlyphSlot, FT_LOAD_DEFAULT, FT_LOAD_NO_HINTING,
-    FT_Load_Glyph, FT_Size_Metrics, FT_SizeRec, FT_UInt, FT_ULong,
+    FT_F26Dot6, FT_Get_Char_Index, FT_Get_Kerning, FT_GlyphSlot, FT_KERNING_DEFAULT,
+    FT_LOAD_DEFAULT, FT_LOAD_NO_HINTING, FT_Load_Glyph, FT_Size_Metrics, FT_SizeRec, FT_UInt,
+    FT_ULong, FT_Vector,
 };
 use log::debug;
 use memmap2::Mmap;
@@ -65,13 +66,20 @@ pub struct PlatformFont {
 
 impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
-        _font_identifier: FontIdentifier,
+        font_identifier: FontIdentifier,
         font_data: &FontData,
+        face_index: u32,
         requested_size: Option<Au>,
     ) -> Result<PlatformFont, &'static str> {
+        // A local identifier knows its named instance as well as its face, which
+        // FreeType wants packed into one index; the plain index is for the tables.
+        let (freetype_face_index, face_index) = match &font_identifier {
+            FontIdentifier::Local(local) => (local.face_index_for_freetype(), local.index()),
+            FontIdentifier::Web(_) | FontIdentifier::ArrayBuffer(_) => (face_index, face_index),
+        };
         let library = FreeTypeLibraryHandle::get().lock();
         let data = FontBackingStore::Web(font_data.clone());
-        let face = FreeTypeFace::new_from_memory(&library, data, 0)?;
+        let face = FreeTypeFace::new_from_memory(&library, data, freetype_face_index)?;
 
         let (requested_face_size, actual_face_size) = match requested_size {
             Some(requested_size) => (requested_size, face.set_size(requested_size)?),
@@ -86,7 +94,7 @@ impl PlatformFontMethods for PlatformFont {
             synthetic_bold: false,
             data_and_index: FontDataAndIndex {
                 data: font_data.clone(),
-                index: 0,
+                index: face_index,
             },
         })
     }
@@ -165,6 +173,22 @@ impl PlatformFontMethods for PlatformFont {
                 None
             }
         }
+    }
+
+    fn glyph_h_kerning(&self, first_glyph: GlyphId, second_glyph: GlyphId) -> FractionalPixel {
+        let face = self.face.lock();
+
+        let mut delta = FT_Vector { x: 0, y: 0 };
+        unsafe {
+            FT_Get_Kerning(
+                face.as_ptr(),
+                first_glyph,
+                second_glyph,
+                FT_KERNING_DEFAULT,
+                &mut delta,
+            );
+        }
+        fixed_26_dot_6_to_float(delta.x) * self.unscalable_font_metrics_scale()
     }
 
     fn glyph_h_advance(&self, glyph: GlyphId) -> Option<FractionalPixel> {

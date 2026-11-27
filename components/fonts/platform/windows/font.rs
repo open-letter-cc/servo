@@ -157,11 +157,12 @@ impl PlatformFontMethods for PlatformFont {
     fn new_from_data(
         _font_identifier: FontIdentifier,
         data: &FontData,
+        face_index: u32,
         pt_size: Option<Au>,
     ) -> Result<Self, &'static str> {
         let font_face = FontFile::new_from_buffer(Arc::new(data.clone()))
             .ok_or("Could not create FontFile")?
-            .create_face(0 /* face_index */, DWRITE_FONT_SIMULATIONS_NONE)
+            .create_face(face_index, DWRITE_FONT_SIMULATIONS_NONE)
             .map_err(|_| "Could not create FontFace")?;
         Self::new(font_face, pt_size, vec![])
     }
@@ -215,6 +216,15 @@ impl PlatformFontMethods for PlatformFont {
             return None;
         }
         Some(*glyph as GlyphId)
+    }
+
+    fn glyph_h_kerning(&self, first_glyph: GlyphId, second_glyph: GlyphId) -> FractionalPixel {
+        let adjustment = self
+            .face
+            .glyph_pair_kerning_adjustment(first_glyph as u16, second_glyph as u16)
+            .unwrap_or_default();
+
+        (adjustment as f32 * self.scaled_du_to_px) as FractionalPixel
     }
 
     fn glyph_h_advance(&self, glyph: GlyphId) -> Option<FractionalPixel> {
